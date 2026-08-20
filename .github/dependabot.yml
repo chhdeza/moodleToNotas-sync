@@ -17,13 +17,24 @@ updates:
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: monthly
+      # Semanal, no mensual. Mensual significa que una version con una
+      # vulnerabilidad puede quedarse fijada hasta 30 dias. Los avisos de
+      # seguridad se saltan el calendario igual, pero el resto de las
+      # actualizaciones no, y son justo las que evitan llegar tarde.
+      interval: weekly
     open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(ci)"
     labels:
       - dependencias
       - seguridad
+    groups:
+      # Un solo PR por semana con todas las acciones, en vez de cinco
+      # sueltos. Son pocas y se revisan mejor juntas: un vistazo a la
+      # tabla de hashes y listo.
+      acciones:
+        patterns:
+          - "*"
 
   # ─── Dependencias de Python (pyproject.toml + uv.lock) ─────────────────
   - package-ecosystem: uv
