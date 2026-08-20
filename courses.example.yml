@@ -1,0 +1,77 @@
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║  courses.yml — qué cursos sincronizar y hacia dónde              ║
+# ╚══════════════════════════════════════════════════════════════════╝
+#
+# Este archivo NO lleva contraseñas: solo códigos de curso.
+# Las credenciales van en el archivo .env, aparte.
+#
+# ¿No sabés qué poner en "groups"? Ejecutá:
+#     mnsync groups --course <id-del-curso>
+# y el programa te muestra los grupos con sus números.
+
+courses:
+  # "id" es un apodo que elegís vos. Se usa para nombrar archivos y
+  # para el comando:  mnsync sync --course redes-2026-3
+  - id: redes-2026-3
+
+    moodle:
+      # De la URL de tu curso en Moodle:
+      #   .../course/view.php?id=8067   →   course_id: 8067
+      course_id: 8067
+
+    # Estos valores son los MISMOS para todos tus grupos de este curso.
+    # Salen de los menús desplegables de la página de Captura de Notas.
+    notas_parciales:
+      ano: "2026"              # Año
+      pac: "3"                 # Período (cuatrimestre)
+      tipo: "O"                # O = Ordinaria (lo normal)
+      asignatura: "00883"      # Sigla del curso
+      escuela: "03"            # Escuela
+      catedra: 253             # Cátedra
+      encargado: ARODRIGUEZP   # Usuario del encargado de cátedra
+      tutor: "0401780367"      # Tu cédula (la del tutor)
+      modelo: 4                # Modelo de evaluación
+
+    # ─── UNA ENTRADA POR CADA GRUPO QUE DAS VOS ───────────────────
+    #
+    # Un curso de Moodle puede tener muchos grupos, pero vos das uno
+    # o dos. Cada grupo de Moodle corresponde a UN grupo distinto en
+    # Notas Parciales.
+    #
+    # "cu" y "grupo" son OBLIGATORIOS. El programa no los adivina: si
+    # los adivinara mal, las notas de un grupo se podrían perder en
+    # silencio. Mejor escribirlos una vez y estar seguros.
+    groups:
+      - moodle_group_id: 38525
+        name: "Grupo 1 — Desamparados"   # solo para los reportes
+        cu: "42"                         # Centro Universitario
+        grupo: 1                         # Número de grupo
+
+      - moodle_group_id: 38526
+        name: "Grupo 2 — San José"
+        cu: "01"
+        grupo: 2
+
+    # ─── Opcional: emparejar columnas a mano ──────────────────────
+    # Normalmente el programa empareja solo la columna de Moodle con
+    # el instrumento de Notas Parciales. Si alguna no la reconoce, la
+    # nombrás acá.
+    # item_map:
+    #   "Tarea 1 (Real)": Tar1
+    #   "Proyecto Final (Real)": Proy1
+
+    # ─── Reglas de seguridad de este curso ────────────────────────
+    policy:
+      # ¿Puede CAMBIAR una nota que ya está puesta en el sistema?
+      # false = no la toca, solo la reporta (recomendado).
+      allow_update: false
+
+      # Si allow_update es true, con qué código se justifica el cambio.
+      # 2005 = "Error de digitación".
+      justificacion_codigo: 2005
+
+      # Freno de seguridad: si una corrida fuera a cambiar MÁS de esta
+      # cantidad de notas en un grupo, se detiene y te avisa en vez de
+      # escribir. Protege contra un error grande hecho de un solo golpe.
+      # Poné 0 para quitar el freno.
+      max_changes: 40

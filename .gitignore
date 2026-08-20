@@ -1,0 +1,30 @@
+# ─── Secretos ────────────────────────────────────────────────
+.env
+
+# ─── Datos de estudiantes (cédulas, nombres, notas) ──────────
+# NUNCA deben llegar a Git.
+*.xlsx
+*.xls
+notas_plan*.csv
+reporte_*.md
+rehearsal_*.jsonl
+calificaciones_*
+salida/
+out/
+
+# ─── Cache de contexto de Notas Parciales (sin credenciales) ─
+.notasparciales_context.json
+
+# ─── Python ──────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
