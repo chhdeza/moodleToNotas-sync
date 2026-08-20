@@ -1,0 +1,55 @@
+version: 2
+
+# Todas las acciones de los flujos van fijadas por hash. Eso protege contra
+# que un tag se reapunte a otro commit, pero tiene un costo: un hash no se
+# mueve nunca, ni siquiera cuando la versión a la que apunta resulta tener
+# una vulnerabilidad.
+#
+# Dependabot cubre justo ese hueco. Entiende el formato
+# `accion@<hash> # vX.Y.Z`: actualiza el hash y el comentario a la vez, y
+# abre un PR que CI verifica antes de que nadie lo mergee.
+#
+# Fijar sin un mecanismo de actualización no es más seguro: solo cambia una
+# vulnerabilidad rápida por una lenta.
+
+updates:
+  # ─── Acciones de GitHub ────────────────────────────────────────────────
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(ci)"
+    labels:
+      - dependencias
+      - seguridad
+
+  # ─── Dependencias de Python (pyproject.toml + uv.lock) ─────────────────
+  - package-ecosystem: uv
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - dependencias
+    groups:
+      # Las actualizaciones de parche llegan juntas en un solo PR: son las
+      # menos riesgosas y no vale la pena revisarlas de a una.
+      parches:
+        update-types:
+          - patch
+
+  # ─── El submódulo grade-uploader ───────────────────────────────────────
+  # Avisa cuando el repositorio original avanza, para que el pin no se quede
+  # atrás en silencio.
+  - package-ecosystem: gitsubmodule
+    directory: "/"
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "chore"
+    labels:
+      - dependencias

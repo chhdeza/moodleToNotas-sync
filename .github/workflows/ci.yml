@@ -6,27 +6,61 @@ on:
   pull_request:
 
 jobs:
+  # ── Pruebas sobre el árbol de dependencias EXACTO del uv.lock ──────────
+  # `--locked` falla si uv.lock no concuerda con pyproject.toml. Es lo que
+  # mantiene honesto al bloqueo: si alguien agrega una dependencia y no
+  # regenera el lock, CI se cae en vez de dejar que se separen en silencio.
   pruebas:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
+          # Este flujo no hace push: que no quede el GITHUB_TOKEN en el
+          # .git/config, donde cualquier paso posterior podría leerlo.
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - name: Instalar uv
+        # Fijada por hash: un tag puede reapuntarse a otro commit; un hash no.
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          python-version: "3.11"
-          cache: pip
+          enable-cache: true
 
-      - name: Instalar
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+      - name: Instalar desde el bloqueo
+        run: uv sync --locked --all-extras
 
       - name: Estilo
-        run: ruff check src tests
+        run: uv run ruff check src tests
 
-      # Solo T0-T2. Las pruebas marcadas "rehearsal" tocan el servidor real de
-      # la UNED y son un acto deliberado del profesor, nunca algo automatico.
+      # Solo T0-T2. Las pruebas marcadas "rehearsal" tocan el servidor real
+      # de la UNED y son un acto deliberado del profesor, nunca algo automatico.
       - name: Pruebas
-        run: pytest -q -m "not rehearsal"
+        run: uv run pytest -q -m "not rehearsal"
+
+  # ── El camino que sigue un colega, tal cual lo documenta el README ─────
+  # El trabajo de arriba prueba el codigo; este prueba las instrucciones.
+  # Si el README se rompe, es un fallo tan real como una prueba en rojo.
+  instalacion:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          # Este flujo no hace push: que no quede el GITHUB_TOKEN en el
+          # .git/config, donde cualquier paso posterior podría leerlo.
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10" # el minimo que declara pyproject.toml
+          cache: pip
+
+      - name: Instalar como lo indica el README
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: El programa arranca y se diagnostica solo
+        run: |
+          mnsync --version
+          mnsync doctor --offline || true   # sin .env: se espera codigo 1
