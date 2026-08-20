@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# Ningun trabajo de este flujo escribe en el repositorio. Se declara explicito
+# para que el GITHUB_TOKEN llegue de solo lectura pase lo que pase en la
+# configuracion de la organizacion.
+permissions:
+  contents: read
+
 jobs:
   # ── Pruebas sobre el árbol de dependencias EXACTO del uv.lock ──────────
   # `--locked` falla si uv.lock no concuerda con pyproject.toml. Es lo que
@@ -64,3 +70,27 @@ jobs:
         run: |
           mnsync --version
           mnsync doctor --offline || true   # sin .env: se espera codigo 1
+
+  # ── Que nadie afloje los anclajes ──────────────────────────────────────
+  # Dependabot mueve los hashes hacia adelante, pero no impide que manana
+  # alguien escriba `uses: alguna/accion@v1`. Un tag flota: se puede
+  # reapuntar a otro commit sin que cambie una sola linea de este repositorio,
+  # y nadie se entera.
+  #
+  # pinact revisa que cada `uses:` siga fijado a un SHA completo. Con
+  # fix: "false" solamente mira y falla; no modifica archivos ni empuja nada.
+  # Es el complemento del dependabot.yml: aquel actualiza los pines, este
+  # impide que desaparezcan.
+  fijado:
+    runs-on: ubuntu-latest
+    steps:
+      # Sin submodulos: aca solo se leen los archivos de .github/workflows.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Revisar que todas las acciones esten fijadas por hash
+        uses: suzuki-shunsuke/pinact-action@896d595f299e71d65b9d28349d6956abe144390a # v3.0.0
+        with:
+          fix: "false" # solo revisa; nunca reescribe
+          skip_push: "true" # y nunca empuja un commit
