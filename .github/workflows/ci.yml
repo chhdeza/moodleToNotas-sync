@@ -13,12 +13,16 @@ jobs:
   pruebas:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
+          # Este flujo no hace push: que no quede el GITHUB_TOKEN en el
+          # .git/config, donde cualquier paso posterior podría leerlo.
+          persist-credentials: false
 
       - name: Instalar uv
-        uses: astral-sh/setup-uv@v10.0.1
+        # Fijada por hash: un tag puede reapuntarse a otro commit; un hash no.
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: true
 
@@ -39,11 +43,14 @@ jobs:
   instalacion:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
+          # Este flujo no hace push: que no quede el GITHUB_TOKEN en el
+          # .git/config, donde cualquier paso posterior podría leerlo.
+          persist-credentials: false
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.10" # el minimo que declara pyproject.toml
           cache: pip
