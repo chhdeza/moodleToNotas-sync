@@ -69,7 +69,7 @@ def load_credentials(env_path: Path | None = None, *, require: bool = True) -> C
     except ImportError:  # pragma: no cover - dependencia declarada
         raise ConfigError(
             "Falta la librería python-dotenv.",
-            remedio="Ejecutá:  pip install -r requirements.txt",
+            remedio="Ejecutá:  pip install -e .",
         ) from None
 
     path = env_path or Path(".env")
@@ -379,7 +379,7 @@ def load_config(path: Path | None = None) -> Config:
     except ImportError:  # pragma: no cover - dependencia declarada
         raise ConfigError(
             "Falta la librería PyYAML.",
-            remedio="Ejecutá:  pip install -r requirements.txt",
+            remedio="Ejecutá:  pip install -e .",
         ) from None
 
     p = path or Path("courses.yml")

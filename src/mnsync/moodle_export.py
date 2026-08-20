@@ -398,7 +398,7 @@ def write_moodle_xlsx(export: GradeExport, path: Path) -> Path:
     except ImportError:  # pragma: no cover - dependencia declarada
         raise MoodleError(
             "Falta la librería openpyxl.",
-            remedio="Ejecutá:  pip install -r requirements.txt",
+            remedio="Ejecutá:  pip install -e .",
         ) from None
 
     wb = openpyxl.Workbook()
