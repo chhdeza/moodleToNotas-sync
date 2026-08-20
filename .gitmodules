@@ -1,0 +1,3 @@
+[submodule "vendor/grade-uploader"]
+	path = vendor/grade-uploader
+	url = https://github.com/chhdeza/grade-uploader.git

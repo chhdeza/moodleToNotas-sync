@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mnsync"
+version = "0.1.0"
+description = "Sincroniza notas de Moodle hacia el sistema de Notas Parciales de la UNED Costa Rica"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "requests>=2.31",
+    "requests-ntlm>=1.2",
+    "python-dotenv>=1.0",
+    "openpyxl>=3.1",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-socket>=0.7",
+    "responses>=0.25",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+mnsync = "mnsync.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--disable-socket --allow-hosts=127.0.0.1,::1 -ra"
+markers = [
+    "rehearsal: hits the REAL Notas Parciales server (read-only, write-fenced). Never run in CI.",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# Conjunto explicito: asi una version nueva de ruff no cambia el resultado de CI.
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "PLW"]
+ignore = [
+    "E501",    # el largo de linea lo maneja el formateador
+    "SIM105",  # contextlib.suppress no siempre es mas claro
+]
+
+[tool.ruff.lint.per-file-ignores]
+# En las pruebas, importar sin usar es a veces parte del andamiaje.
+"tests/*" = ["B011"]
