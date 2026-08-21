@@ -242,10 +242,11 @@ def check_routing(routing: Routing) -> RoutingVerdict:
             ),
             remedy=(
                 "Cuando falla todo a la vez, el problema no es la matrícula: son los "
-                "códigos de la asignatura. Revisá «asignatura», «modelo», «pac» y «ano» "
-                "en courses.yml contra los menús de la página de Captura de Notas. El "
-                "sistema no da error cuando esos códigos no corresponden: simplemente "
-                "devuelve tablas vacías. No se escribió nada."
+                "códigos con los que se consultó. Revisá «asignatura», «modelo», «pac» y "
+                "«ano» en courses.yml contra los menús de la página de Captura de Notas, "
+                "y NP_TUTOR —tu cédula—, que es con la que el sistema decide cuáles "
+                "grupos son tuyos. El sistema no da error cuando alguno no corresponde: "
+                "simplemente devuelve tablas vacías. No se escribió nada."
             ),
         )
 

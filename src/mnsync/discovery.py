@@ -186,9 +186,11 @@ def verificar_contexto(
             ),
             remedio=(
                 "Cuando falla todo a la vez, el problema no es la matrícula: son los "
-                "códigos de la asignatura. Revisá «asignatura», «modelo», «pac» y «ano» "
-                "contra los menús de la página de Captura de Notas. El sistema no da "
-                "error cuando no corresponden: devuelve listas vacías."
+                "códigos con los que se consultó. Revisá «asignatura», «modelo», «pac» "
+                "y «ano» contra los menús de la página de Captura de Notas, y volvé al "
+                "primer paso a revisar tu cédula: con ella el sistema decide cuáles "
+                "grupos son tuyos. El sistema no da error cuando alguno no corresponde: "
+                "devuelve listas vacías."
             ),
             estudiantes=estudiantes,
             cus=cus,

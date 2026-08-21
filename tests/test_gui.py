@@ -407,3 +407,65 @@ def test_cambiar_de_curso_no_deja_autorizaciones_colgando(ventana):
 
     assert ventana.autorizadas() == set()
     assert ventana.tabla.rowCount() == 0
+
+
+# ---------------------------------------------------------------------------
+# La cédula del tutor: pedida, explicada y propuesta
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def paso_credenciales(tmp_path):
+    """El primer paso del asistente, con el campo de cédula ya vacío."""
+    from mnsync.gui.asistente import construir_asistente
+
+    asistente = construir_asistente(tmp_path)
+    paso = asistente.page(asistente.pageIds()[0])
+    paso.tutor.setText("")
+    yield paso
+    asistente.close()
+
+
+def test_la_cedula_se_propone_desde_el_usuario_de_moodle(paso_credenciales):
+    """
+    En la UNED se entra a Moodle con la cédula: es el mismo dato dos veces.
+
+    Se propone y no se impone. Una propuesta equivocada la atrapa la
+    comprobación del paso 3, que es contra el servidor.
+    """
+    paso_credenciales.moodle_usuario.setText("0401780367")
+    assert paso_credenciales.tutor.text() == "0401780367"
+
+
+def test_un_usuario_de_moodle_que_no_es_cedula_no_propone_nada(paso_credenciales):
+    """Rellenar con algo que no es una cédula sería peor que dejarlo vacío."""
+    paso_credenciales.moodle_usuario.setText("chernandeza")
+    assert paso_credenciales.tutor.text() == ""
+
+
+def test_la_propuesta_no_pisa_lo_que_se_escribio_a_mano(paso_credenciales):
+    """
+    Quien escribió su cédula ya decidió.
+
+    Un profesor cuyo usuario de Moodle NO es su cédula la corrige a mano; si al
+    tocar el otro campo se le volviera a cambiar, el asistente le discutiría el
+    único dato que él sabe y nosotros no.
+    """
+    paso_credenciales.tutor.setText("111111111")
+    paso_credenciales.moodle_usuario.setText("0401780367")
+    assert paso_credenciales.tutor.text() == "111111111"
+
+
+def test_falta_la_cedula_se_dice_con_el_nombre_que_tiene_en_pantalla(paso_credenciales):
+    """
+    «Falta completar: cédula» no se encuentra en la pantalla.
+
+    El aviso tiene que nombrar el campo tal como está rotulado, o quien lo lee
+    busca algo que no existe con ese nombre.
+    """
+    paso_credenciales.moodle_usuario.setText("chernandeza")
+    paso_credenciales.moodle_clave.setText("x")
+    paso_credenciales.np_usuario.setText("chernandeza")
+    paso_credenciales.np_clave.setText("x")
+
+    paso_credenciales._comprobar()
+
+    assert "tu cédula de tutora o tutor" in paso_credenciales.estado.text()

@@ -153,13 +153,30 @@ class PasoCredenciales(PasoBase):
         self.np_usuario.setPlaceholderText("sin @uned.ac.cr")
         self.np_clave = QLineEdit(echoMode=QLineEdit.EchoMode.Password)
         self.tutor = QLineEdit()
-        self.tutor.setPlaceholderText("tu cédula, sin guiones")
+        self.tutor.setPlaceholderText("sin guiones")
+        self.tutor.setToolTip(
+            "Notas Parciales identifica al tutor por su cédula. Va en cada "
+            "consulta al sistema, junto con los códigos de la asignatura."
+        )
+        self.moodle_usuario.textChanged.connect(self._sugerir_cedula)
 
         self.recordar = QCheckBox(
             "Recordar en este equipo (Administrador de credenciales de Windows)"
         )
         self.recordar.setChecked(credstore.disponible())
         self.recordar.setEnabled(credstore.disponible())
+
+        # La cédula NO es una tercera contraseña, y ponerla debajo de una lo
+        # parecía. Es uno de los nueve códigos con los que el sistema arma cada
+        # consulta (specs/003, A-05): así identifica al tutor. Se pide acá y no
+        # con los otros ocho porque es un dato personal, y por eso se guarda en
+        # el almacén de Windows y nunca en courses.yml (specs/002, R-15).
+        explicacion = QLabel(
+            "Es el número con el que Notas Parciales sabe cuáles grupos son "
+            "tuyos. No es una contraseña: viaja en cada consulta, junto con "
+            "los códigos de tu asignatura."
+        )
+        explicacion.setWordWrap(True)
 
         form = QFormLayout()
         form.addRow(QLabel("<b>Moodle</b>"))
@@ -169,7 +186,10 @@ class PasoCredenciales(PasoBase):
         form.addRow(QLabel("<b>Notas Parciales</b>"))
         form.addRow("Usuario:", self.np_usuario)
         form.addRow("Contraseña:", self.np_clave)
-        form.addRow("Tu cédula:", self.tutor)
+        form.addRow(QLabel(""))
+        form.addRow(QLabel("<b>Tu cédula de tutora o tutor</b>"))
+        form.addRow(explicacion)
+        form.addRow("Cédula:", self.tutor)
 
         self.boton = QPushButton("Comprobar que funcionan")
         self.boton.clicked.connect(self._comprobar)
@@ -203,7 +223,7 @@ class PasoCredenciales(PasoBase):
                 ("contraseña de Moodle", self.moodle_clave),
                 ("usuario de Notas Parciales", self.np_usuario),
                 ("contraseña de Notas Parciales", self.np_clave),
-                ("cédula", self.tutor),
+                ("tu cédula de tutora o tutor", self.tutor),
             )
             if not campo.text().strip()
         ]
@@ -265,6 +285,30 @@ class PasoCredenciales(PasoBase):
         if np:
             self.np_usuario.setText(np.username)
             self.np_clave.setText(np.password)
+
+        guardada = _cedula_guardada()
+        if guardada:
+            self.tutor.setText(guardada)
+        elif moodle:
+            self._sugerir_cedula(moodle.username)
+
+    def _sugerir_cedula(self, texto: str) -> None:
+        """
+        Si el usuario de Moodle es un número de cédula, proponerlo.
+
+        En la UNED se entra a Moodle con la cédula, así que casi siempre es el
+        mismo dato escrito dos veces. Se **propone**, no se impone: el campo
+        queda editable y una propuesta equivocada la atrapa la comprobación del
+        paso 3, que es contra el servidor.
+
+        Solo se rellena mientras esté vacío. Pisar algo que la persona escribió
+        a mano sería peor que no ayudar.
+        """
+        limpio = texto.strip()
+        if self.tutor.text().strip():
+            return
+        if limpio.isdigit() and 9 <= len(limpio) <= 12:
+            self.tutor.setText(limpio)
 
     def _olvidar_comprobacion(self) -> None:
         # Cambió una credencial: lo comprobado antes ya no vale para lo de ahora.
@@ -751,6 +795,23 @@ class Asistente(QWizard):
             np_tutor=paso.tutor.text().strip(),
             np_base_url=NP_BASE_URL_DEFAULT,
         )
+
+
+def _cedula_guardada() -> str:
+    """
+    La cédula del tutor que ya esté configurada, si la hay.
+
+    Sale de donde la dejó una configuración anterior —el entorno, el ``.env`` o
+    el almacén de Windows— para no hacérsela escribir de nuevo a quien vuelve a
+    correr el asistente. Si no hay nada, se devuelve vacío y el paso la propone
+    a partir del usuario de Moodle.
+    """
+    from ..config import load_credentials
+
+    try:
+        return load_credentials(require=False).np_tutor
+    except Exception:  # noqa: BLE001 - una precarga nunca puede romper la ventana
+        return ""
 
 
 def construir_asistente(work_dir: Path) -> Asistente:
