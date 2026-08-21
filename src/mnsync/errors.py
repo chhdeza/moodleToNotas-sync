@@ -46,3 +46,15 @@ class UploaderError(MnsyncError):
 
 class GuardError(MnsyncError):
     """Un freno de seguridad detuvo la operación antes de escribir."""
+
+
+class RoutingError(MnsyncError):
+    """
+    El enrutamiento violó una invariante del dominio.
+
+    Es el único error de este módulo dirigido a quien desarrolla y no al
+    profesor. Se usa cuando el resultado del sondeo contradice algo que
+    specs/001 da por cierto: no es que el profesor haya configurado algo mal,
+    es que el programa dejó de entender lo que está leyendo, y en ese estado no
+    puede escribir nada con confianza.
+    """

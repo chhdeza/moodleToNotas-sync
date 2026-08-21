@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import Destination, Policy
+from .errors import RoutingError
 from .uploader import ACCION_SIN_ROSTER, ACCIONES_DE_ESCRITURA
 
 
@@ -176,9 +177,39 @@ def merge_routing(planes: list[tuple[Destination, Path]]) -> Routing:
                 if nombre:
                     routing.nombres.setdefault(cedula, nombre)
                 if (row.get("accion") or "").strip() != ACCION_SIN_ROSTER:
+                    _assert_un_solo_destino(routing, cedula, destination)
                     routing.ubicados[cedula] = destination
 
     return routing
+
+
+def _assert_un_solo_destino(routing: Routing, cedula: str, destination: Destination) -> None:
+    """
+    Un estudiante pertenece a un solo grupo oficial por asignatura (specs/001, D-05).
+
+    Si aparece en dos rosters, **el sondeo está mal**, no la matrícula del
+    estudiante: lo más probable es que el servidor haya respondido a un grupo
+    inexistente devolviendo el contenido de otro, en vez de una tabla vacía.
+
+    Es el mismo fallo silencioso que ya se vigila del lado de Moodle, donde
+    pedir un grupo que no existe devuelve el curso entero sin dar error. Acá se
+    corta por la misma razón: no se puede escribir con confianza cuando la
+    respuesta del servidor dejó de significar lo que se le preguntó.
+    """
+    anterior = routing.ubicados.get(cedula)
+    if anterior is None or anterior.key == destination.key:
+        return
+
+    raise RoutingError(
+        f"La cédula {cedula} aparece en dos grupos oficiales a la vez: "
+        f"{anterior.label} y {destination.label}.",
+        remedio=(
+            "Error interno del sondeo, no un problema de matrícula. Un estudiante "
+            "pertenece a un solo grupo por asignatura, así que el servidor debe haber "
+            "respondido a un grupo inexistente con datos de otro. No se escribió nada: "
+            "reportá esta corrida a quien mantiene el programa."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

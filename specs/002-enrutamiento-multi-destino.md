@@ -213,7 +213,7 @@ centros universitarios, un CU repartido en dos destinos y un estudiante sin dest
 - [x] **CA-03** El estudiante sin destino aparece nombrado en el reporte y no impide que suban los demás. *(R-06, R-07)* — `test_ca03_estudiante_sin_destino_no_detiene_al_resto`, `test_reporte_nombra_a_quien_se_quedo_sin_destino`
 - [x] **CA-04** Con un CU cuyos estudiantes no emparejan ninguno, se detiene ese CU y solo ese. *(R-09)* — `test_ca04_un_cu_sin_destino_no_arrastra_a_los_otros`, `test_un_cu_entero_sin_destino_bloquea_ese_cu`
 - [x] **CA-05** Con códigos de contexto equivocados, no se escribe absolutamente nada. *(R-09)* — `test_ca05_contexto_equivocado_no_escribe_nada`, `test_todos_los_cu_sin_destino_apuntan_a_los_codigos`
-- [ ] **CA-06** Un roster manipulado para devolver una cédula repetida produce un fallo de sondeo, no un mensaje sobre el estudiante. *(R-08)* — **pendiente:** falta la aserción interna
+- [x] **CA-06** Un roster manipulado para devolver una cédula repetida produce un fallo de sondeo, no un mensaje sobre el estudiante. *(R-08)* — `test_una_cedula_en_dos_rosters_es_un_fallo_del_sondeo`
 - [x] **CA-07** La configuración escrita no contiene ninguna cédula. *(R-15)* — `test_ca07_la_configuracion_no_contiene_cedulas`
 - [x] **CA-08** Las pruebas existentes de alcance de grupo siguen pasando sin modificarse. *(R-10, R-11)* — `test_moodle_export.py` y `test_aborta_si_los_dos_grupos_traen_los_mismos_estudiantes`, sin tocar
 
@@ -221,5 +221,5 @@ centros universitarios, un CU repartido en dos destinos y un estudiante sin dest
 
 | Versión | Fecha | Cambio |
 |---------|-------|--------|
-| 1.1 | 2026-08-21 | Implementación. **R-14 retirado**: el submódulo quedó sin modificar. Se documentan dos mecanismos que la versión 1.0 no anticipaba: un archivo por centro universitario, y el recorte de cada plan a su destino. Siete de ocho criterios verificados; CA-06 queda pendiente. |
+| 1.1 | 2026-08-21 | Implementación. **R-14 retirado**: el submódulo quedó sin modificar. Se documentan dos mecanismos que la versión 1.0 no anticipaba: un archivo por centro universitario, y el recorte de cada plan a su destino. Los ocho criterios de aceptación quedan verificados. |
 | 1.0 | 2026-08-21 | Versión inicial. |

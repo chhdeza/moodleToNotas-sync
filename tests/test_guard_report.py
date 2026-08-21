@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from mnsync.config import Course, Destination, MoodleGroupRef, NotasParcialesCtx, Policy
+from mnsync.errors import RoutingError
 from mnsync.guard import Routing, check, check_routing, merge_routing, summarize_plan
 from mnsync.report import DestinationOutcome, RunReport
 
@@ -184,6 +185,29 @@ def test_sin_estudiantes_no_se_da_por_bueno():
     veredicto = check_routing(Routing())
     assert veredicto.blocked
     assert "ningún estudiante" in veredicto.reason
+
+
+def test_una_cedula_en_dos_rosters_es_un_fallo_del_sondeo(tmp_path):
+    """
+    Un estudiante pertenece a un solo grupo oficial (specs/001, D-05).
+
+    Si aparece en dos, el sondeo está mal —probablemente el servidor respondió a
+    un grupo inexistente con datos de otro— y el mensaje va dirigido a quien
+    desarrolla, nunca al profesor como si su estudiante tuviera un problema
+    (specs/002, R-08).
+    """
+    d1, d2 = Destination("42", 1), Destination("42", 2)
+    p1 = escribir_plan(tmp_path, ["upload"], destino=d1, nombre="p1.csv", cedulas=["aaa"])
+    p2 = escribir_plan(tmp_path, ["upload"], destino=d2, nombre="p2.csv", cedulas=["aaa"])
+
+    with pytest.raises(RoutingError) as ex:
+        merge_routing([(d1, p1), (d2, p2)])
+
+    mensaje = str(ex.value)
+    assert "CU 42 / grupo 1" in mensaje and "CU 42 / grupo 2" in mensaje
+    assert "Error interno" in mensaje
+    assert "no un problema de matrícula" in mensaje
+    assert "No se escribió nada" in mensaje
 
 
 def test_merge_fusiona_los_planes_de_cada_destino(tmp_path):
