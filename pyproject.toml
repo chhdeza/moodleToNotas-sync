@@ -19,6 +19,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# La aplicación de escritorio. Es opcional a propósito: la línea de
+# comandos y el flujo automático no necesitan una interfaz gráfica, y
+# PySide6 pesa demasiado para imponérselo a un runner de CI.
+gui = [
+    "PySide6>=6.7",
+]
+
 dev = [
     "pytest>=8.0",
     "pytest-socket>=0.7",
@@ -28,6 +35,7 @@ dev = [
 
 [project.scripts]
 mnsync = "mnsync.cli:main"
+mnsync-app = "mnsync.gui.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
