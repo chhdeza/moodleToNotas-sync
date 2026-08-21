@@ -31,13 +31,20 @@
 | `skip_already_set` | Nada — ver muchas es buena señal |
 | `mark_not_presented` | Confirmar que no entregó |
 | `would_overwrite` | 🛑 Revisar |
-| `skip_not_in_roster` | 🛑 Revisar cédula en Moodle **o** grupo en `courses.yml` |
+| `skip_not_in_roster` | Nada: es alguien de otro grupo oficial, lo sube el plan que le toca |
 | `skip_retirado` | Nada |
 | `review` | 🛑 Mirar con calma |
 
+## «Estudiantes sin grupo oficial», arriba del reporte
+
+Están en tu Moodle pero no en Notas Parciales. **No se les subió nada.** Es poco
+frecuente y casi siempre significa que no quedaron matriculados: consultalo con
+registro. El resto de las notas sí subió con normalidad.
+
 ## Códigos de salida
 
-`0` todo bien · `1` error · `2` un freno detuvo un grupo (**no se escribió nada** ahí)
+`0` todo bien · `1` error · `2` un freno detuvo un grupo de Notas Parciales
+(**no se escribió nada** ahí)
 
 ## Si algo sale mal
 
