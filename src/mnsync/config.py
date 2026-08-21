@@ -335,32 +335,8 @@ def _parse_moodle_group(raw: Any, *, course_id: str, index: int) -> MoodleGroupR
     if not isinstance(raw, dict):
         raise ConfigError(f"{where} debería ser un número o un bloque con «id», no «{raw!r}».")
 
-    # El esquema anterior ponía «cu» y «grupo» dentro de cada grupo de Moodle.
-    # Ignorarlos en silencio sería el peor de los caminos: el archivo diría una
-    # cosa y el programa haría otra. Mejor detenerse y explicar el cambio.
-    if "cu" in raw or "grupo" in raw:
-        raise ConfigError(
-            f"{where} todavía tiene «cu» y «grupo» adentro, del formato anterior.",
-            remedio=(
-                "Un grupo de Moodle reúne estudiantes de varios centros universitarios, "
-                "así que ya no se le asigna uno solo. Quitá «cu» y «grupo» de cada grupo "
-                "y dejá únicamente «id» y «name». Si querés declarar los grupos de Notas "
-                "Parciales, van aparte, en una sección «destinos» del curso. Mirá "
-                "«courses.example.yml»."
-            ),
-        )
-
-    # «moodle_group_id» era el nombre del esquema anterior; se sigue aceptando
-    # para no romper un archivo escrito a mano antes del cambio.
-    bruto = raw.get("id", raw.get("moodle_group_id"))
-    if bruto is None or bruto == "":
-        raise ConfigError(
-            f"Falta «id» en {where}.",
-            remedio="Mirá «courses.example.yml»: ahí está explicado campo por campo.",
-        )
-
     return MoodleGroupRef(
-        moodle_group_id=_as_int(bruto, "id", where),
+        moodle_group_id=_as_int(_req(raw, "id", where), "id", where),
         name=_as_str(raw.get("name") or ""),
     )
 
@@ -438,10 +414,8 @@ def _parse_course(raw: Any, index: int) -> Course:
         tipo=_as_str(np_raw.get("tipo") or "O"),
     )
 
-    # Los grupos del tutor viven bajo «moodle:», que es donde conceptualmente
-    # pertenecen. Se acepta también en el nivel del curso, por los archivos
-    # escritos a mano con el esquema anterior.
-    groups_raw = moodle.get("groups", raw.get("groups"))
+    # Los grupos del tutor viven bajo «moodle:», que es donde pertenecen.
+    groups_raw = moodle.get("groups")
     if not isinstance(groups_raw, list) or not groups_raw:
         raise ConfigError(
             f"{where} no tiene ningún grupo de Moodle configurado.",
@@ -457,7 +431,7 @@ def _parse_course(raw: Any, index: int) -> Course:
 
     # Los destinos son opcionales: si faltan, se descubren sondeando el servidor
     # (specs/002, R-05). El asistente los escribe; a mano se pueden omitir.
-    destinos_raw = raw.get("destinos") or raw.get("destinations") or []
+    destinos_raw = raw.get("destinos") or []
     if not isinstance(destinos_raw, list):
         raise ConfigError(
             f"«destinos» en {where} debería ser una lista de bloques con «cu» y «grupo»."
