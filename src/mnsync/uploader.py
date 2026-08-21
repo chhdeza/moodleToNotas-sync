@@ -239,7 +239,7 @@ class Uploader:
                 if not pendientes:
                     break
                 candidato = Destination(cu=cu, grupo=numero)
-                ubicados = self._cedulas_en_destino(candidato, [xlsx])
+                ubicados = self.cedulas_en_destino(candidato, [xlsx])
                 if not ubicados:
                     continue
                 encontrados.append(candidato)
@@ -247,7 +247,7 @@ class Uploader:
 
         return encontrados
 
-    def _cedulas_en_destino(
+    def cedulas_en_destino(
         self, destination: Destination, xlsx_paths: Sequence[Path]
     ) -> set[str]:
         """

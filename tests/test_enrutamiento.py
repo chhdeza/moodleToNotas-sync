@@ -407,6 +407,36 @@ def test_ca07_la_configuracion_no_contiene_cedulas(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# El comando «destinos»
+# ---------------------------------------------------------------------------
+@responses.activate
+def test_el_comando_destinos_no_escribe_y_muestra_el_reparto(fake_np, tmp_path, capsys):
+    """
+    Averigua el reparto por separado, para poder anotarlo y no repetirlo.
+
+    Es de solo lectura: se conecta al sistema oficial pero no escribe nada.
+    """
+    pob = Poblacion()
+    pob.sembrar(fake_np.scenario)
+
+    mock_moodle(
+        responses.mock,
+        {GRUPO_A: csv_de(pob.grupo_a()), GRUPO_B: csv_de(pob.grupo_b())},
+    )
+    cfg = escribir_courses_yml(tmp_path, grupos_moodle=[GRUPO_A, GRUPO_B], destinos=None)
+
+    assert correr(tmp_path, cfg, "destinos", "--course", "curso-prueba") == 0
+    assert fake_np.journal == [], "el comando destinos escribió algo"
+
+    salida = capsys.readouterr().out
+    for cu, grupo, _ in pob.destinos():
+        assert f"CU {cu} · grupo {grupo}" in salida
+    # Y deja el bloque listo para copiar a courses.yml.
+    assert "destinos:" in salida
+    assert 'cu: "42"' in salida
+
+
+# ---------------------------------------------------------------------------
 # CA-08 — el descubrimiento de destinos, cuando no se declaran
 # ---------------------------------------------------------------------------
 @responses.activate

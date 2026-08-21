@@ -22,7 +22,8 @@ from .config import Config, Course, Credentials, load_config, load_credentials, 
 from .errors import MnsyncError
 from .moodle_export import MoodleSession
 from .report import write_report
-from .sync import fetch_groups, sync_course
+from .sync import fetch_groups, split_por_cu, sync_course
+from .uploader import Uploader
 
 ANCHO = 70
 
@@ -214,6 +215,82 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     siguiente_paso(
         [
             "Abrí esos archivos en Excel si querés revisarlos. Después:",
+            "",
+            f"   mnsync plan --course {course.id}",
+        ]
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# destinos
+# ---------------------------------------------------------------------------
+def cmd_destinos(args: argparse.Namespace) -> int:
+    """
+    Averigua a qué grupos de Notas Parciales van a parar tus estudiantes.
+
+    Es lo mismo que hace la primera sincronización, pero por separado y sin
+    escribir nada, para poder anotar el resultado en ``courses.yml`` y que las
+    corridas siguientes no tengan que volver a averiguarlo.
+    """
+    cfg, creds = _cargar(args)
+    course = cfg.course(args.course)
+    work = _work_dir(args)
+
+    titulo(f"GRUPOS DE NOTAS PARCIALES — {course.id}")
+    print()
+    print(" Bajando tus grupos de Moodle y preguntándole al sistema de la UNED")
+    print(" dónde está matriculado cada estudiante. Todo es de lectura: no se")
+    print(" escribe ni una nota.")
+    print()
+
+    exports = fetch_groups(course, creds, work, groups=_grupos_pedidos(course, args))
+    xlsx_por_cu = split_por_cu(exports, work, course.id)
+    uploader = Uploader(course, creds, work)
+
+    destinos = uploader.discover_destinations(sorted(xlsx_por_cu), xlsx_por_cu)
+
+    total = sum(len(ge.export) for ge in exports)
+    print(f" {total} estudiante(s) de {len(xlsx_por_cu)} centro(s) universitario(s).")
+    print()
+
+    if not destinos:
+        print(" ✗ No se encontró ningún grupo de Notas Parciales.")
+        print()
+        print(" Ninguno de tus estudiantes apareció en el sistema oficial. Eso no")
+        print(" suele ser un problema de matrícula: revisá «asignatura», «modelo»,")
+        print(" «pac» y «ano» en courses.yml contra los menús de la página de")
+        print(" Captura de Notas. Cuando esos códigos no corresponden, el sistema")
+        print(" no da error: devuelve listas vacías.")
+        return 1
+
+    print(f"   {'Grupo oficial':<26} {'Estudiantes'}")
+    print(f"   {'-' * 26} {'-' * 11}")
+    por_cu: dict[str, int] = {}
+    for d in destinos:
+        cuantos = len(uploader.cedulas_en_destino(d, [xlsx_por_cu[d.cu]]))
+        por_cu[d.cu] = por_cu.get(d.cu, 0) + cuantos
+        print(f"   CU {d.cu} · grupo {d.grupo:<12} {cuantos}")
+    print("=" * ANCHO)
+
+    repartidos = [cu for cu, _ in por_cu.items() if sum(1 for d in destinos if d.cu == cu) > 1]
+    if repartidos:
+        print()
+        print(f" Nota: el centro universitario {', '.join(repartidos)} aparece en más de")
+        print(" un grupo. Es normal: no todos sus estudiantes están en el mismo.")
+
+    print()
+    print(" Para que las próximas corridas no tengan que volver a averiguarlo,")
+    print(" copiá esto en courses.yml, dentro de tu curso:")
+    print()
+    print("    destinos:")
+    for d in destinos:
+        print(f'      - cu: "{d.cu}"')
+        print(f"        grupo: {d.grupo}")
+
+    siguiente_paso(
+        [
+            "Ahora mirá qué se subiría, sin escribir nada:",
             "",
             f"   mnsync plan --course {course.id}",
         ]
@@ -496,6 +573,14 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--course", required=True)
     f.add_argument("--group", help="Limitar a un grupo de Moodle")
     f.set_defaults(func=cmd_fetch)
+
+    de = sub.add_parser(
+        "destinos",
+        help="Ver a qué grupos de Notas Parciales van tus estudiantes",
+    )
+    de.add_argument("--course", required=True)
+    de.add_argument("--group", help="Limitar a un grupo de Moodle")
+    de.set_defaults(func=cmd_destinos)
 
     pl = sub.add_parser("plan", help="Ver qué se subiría, sin escribir nada")
     pl.add_argument("--course", required=True)
