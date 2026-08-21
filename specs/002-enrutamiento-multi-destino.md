@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Estado** | Implementado |
-| **Versión** | 1.1 |
+| **Versión** | 1.2 |
 | **Fecha** | 2026-08-21 |
 | **Depende de** | [001 — Modelo de dominio](001-modelo-de-dominio.md) |
 | **Lo usa** | [003 — Aplicación de escritorio](003-aplicacion-escritorio.md) |
@@ -139,8 +139,15 @@ cumple por completo.
 
 ### Datos personales
 
-**R-15.** La configuración persistida **DEBE** contener únicamente la lista de destinos
-`(cu, grupo)`. **NO DEBE** contener cédulas ni ningún dato personal.
+**R-15.** La configuración persistida **NO DEBE** contener cédulas ni ningún otro dato
+personal. Los destinos se guardan como pares `(cu, grupo)`; la cédula del tutor va con
+las credenciales, como `NP_TUTOR`.
+
+> **Corregido en v1.2, después de que fallara en la práctica.** La versión 1.1 daba por
+> bueno que `courses.yml` no llevaba datos personales, y llevaba uno: `tutor` es la
+> cédula del profesor. El archivo se subió a un repositorio antes de que nadie lo
+> notara. Con veinte profesores, cada configuración habría arrastrado la cédula de su
+> dueño al historial de git.
 
 > **Fundamento.** La configuración que produce el asistente la consume también el flujo
 > automático de GitHub Actions, y por tanto vive en un repositorio. Lo que entra al
@@ -221,5 +228,6 @@ centros universitarios, un CU repartido en dos destinos y un estudiante sin dest
 
 | Versión | Fecha | Cambio |
 |---------|-------|--------|
+| 1.2 | 2026-08-21 | **R-15 corregido**: `tutor` era una cédula y vivía en `courses.yml`. Pasa a las credenciales (`NP_TUTOR`) y el archivo se saca del control de versiones. |
 | 1.1 | 2026-08-21 | Implementación. **R-14 retirado**: el submódulo quedó sin modificar. Se documentan dos mecanismos que la versión 1.0 no anticipaba: un archivo por centro universitario, y el recorte de cada plan a su destino. Los ocho criterios de aceptación quedan verificados. |
 | 1.0 | 2026-08-21 | Versión inicial. |

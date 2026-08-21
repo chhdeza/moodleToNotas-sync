@@ -62,7 +62,6 @@ def escribir_courses_yml(
         '      escuela: "03"',
         "      catedra: 253",
         "      encargado: ARODRIGUEZP",
-        '      tutor: "0401780367"',
         "      modelo: 4",
         "    destinos:",
     ]

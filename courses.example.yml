@@ -3,6 +3,7 @@
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # Este archivo NO lleva contraseñas ni cédulas: solo códigos.
+# Tu cédula (la del tutor) va en el .env, como NP_TUTOR.
 # Las credenciales van en el archivo .env, aparte.
 #
 # ¿No sabés qué poner en "groups"? Ejecutá:
@@ -44,7 +45,6 @@ courses:
       escuela: "03"            # Escuela
       catedra: 253             # Cátedra
       encargado: ARODRIGUEZP   # Usuario del encargado de cátedra
-      tutor: "0401780367"      # Tu cédula (la del tutor)
       modelo: 4                # Modelo de evaluación
 
     # ─── Opcional: los grupos de Notas Parciales ──────────────────

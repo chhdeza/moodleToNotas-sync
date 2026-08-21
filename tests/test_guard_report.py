@@ -244,7 +244,7 @@ def curso_de_prueba() -> Course:
         moodle_course_id=8067,
         np=NotasParcialesCtx(
             ano="2026", pac="3", asignatura="00883", escuela="03",
-            catedra=253, encargado="X", tutor="0", modelo=4,
+            catedra=253, encargado="X", modelo=4,
         ),
         groups=(GRUPO_MOODLE,),
         destinations=(DESTINO,),

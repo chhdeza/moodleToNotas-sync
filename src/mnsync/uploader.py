@@ -90,7 +90,7 @@ class Uploader:
             "--escuela", np.escuela,
             "--catedra", str(np.catedra),
             "--encargado", np.encargado,
-            "--tutor", np.tutor,
+            "--tutor", self.creds.np_tutor,
             "--modelo", str(np.modelo),
         ]
 

@@ -40,6 +40,7 @@ FAKE_ENV = {
     "MOODLE_PASSWORD": "contrasena-de-prueba",
     "NP_NTLM_USER": "profesor.prueba",
     "NP_NTLM_PASSWORD": "contrasena-de-prueba",
+    "NP_TUTOR": "0000000000",
 }
 
 REAL_HOST = "produccion.uned.ac.cr"

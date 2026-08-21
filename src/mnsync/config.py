@@ -37,13 +37,21 @@ MOODLE_URL_DEFAULT = "https://aprende.uned.ac.cr"
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class Credentials:
-    """Las 5 variables del .env. Nunca se registran en logs ni reportes."""
+    """
+    Quién es el profesor y con qué entra. Nunca se registra en logs ni reportes.
+
+    ``np_tutor`` es su cédula. No es un secreto —el sistema de la UNED la
+    muestra en un menú— pero sí es un dato personal, y vive acá y no en
+    ``courses.yml`` por eso: la configuración se comparte y se commitea, y lo
+    que entra al historial de git no sale nunca (specs/002, R-15).
+    """
 
     moodle_url: str
     moodle_username: str
     moodle_password: str
     np_user: str
     np_password: str
+    np_tutor: str = ""
     np_base_url: str = NP_BASE_URL_DEFAULT
 
     @property
@@ -58,6 +66,7 @@ class Credentials:
             f"Credentials(moodle_url={self.moodle_url!r}, "
             f"moodle_username={self.moodle_username!r}, moodle_password='***', "
             f"np_user={self.np_user!r}, np_password='***', "
+            f"np_tutor={self.np_tutor!r}, "
             f"np_base_url={self.np_base_url!r})"
         )
 
@@ -105,6 +114,7 @@ def load_credentials(env_path: Path | None = None, *, require: bool = True) -> C
         moodle_password=con_respaldo("MOODLE_PASSWORD", guardadas["moodle_password"]),
         np_user=con_respaldo("NP_NTLM_USER", guardadas["np_user"]),
         np_password=con_respaldo("NP_NTLM_PASSWORD", guardadas["np_password"]),
+        np_tutor=get("NP_TUTOR"),
         np_base_url=(get("NP_BASE_URL") or NP_BASE_URL_DEFAULT).rstrip("/"),
     )
 
@@ -148,6 +158,7 @@ def _credential_fields(creds: Credentials) -> list[tuple[str, str]]:
         ("MOODLE_PASSWORD", creds.moodle_password),
         ("NP_NTLM_USER", creds.np_user),
         ("NP_NTLM_PASSWORD", creds.np_password),
+        ("NP_TUTOR", creds.np_tutor),
     ]
 
 
@@ -234,7 +245,6 @@ class NotasParcialesCtx:
     escuela: str
     catedra: int
     encargado: str
-    tutor: str
     modelo: int
     tipo: str = "O"
 
@@ -409,7 +419,6 @@ def _parse_course(raw: Any, index: int) -> Course:
         escuela=_as_str(_req(np_raw, "escuela", np_where)),
         catedra=_as_int(_req(np_raw, "catedra", np_where), "catedra", np_where),
         encargado=_as_str(_req(np_raw, "encargado", np_where)),
-        tutor=_as_str(_req(np_raw, "tutor", np_where)),
         modelo=_as_int(_req(np_raw, "modelo", np_where), "modelo", np_where),
         tipo=_as_str(np_raw.get("tipo") or "O"),
     )
