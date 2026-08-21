@@ -20,11 +20,13 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFormLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QPushButton,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -50,6 +52,7 @@ class Borrador:
     """
 
     creds: Credentials | None = None
+    cursos_moodle: list[MoodleCourse] = field(default_factory=list)
     curso_moodle: MoodleCourse | None = None
     grupos_moodle: list[MoodleGroup] = field(default_factory=list)
     seleccionados: list[int] = field(default_factory=list)
@@ -168,9 +171,13 @@ class PasoCredenciales(PasoBase):
         form.addRow("Contraseña:", self.np_clave)
         form.addRow("Tu cédula:", self.tutor)
 
+        self.boton = QPushButton("Comprobar que funcionan")
+        self.boton.clicked.connect(self._comprobar)
+
         caja = QVBoxLayout(self)
         caja.addLayout(form)
         caja.addWidget(self.recordar)
+        caja.addWidget(self.boton)
         caja.addWidget(self.estado)
 
         for campo in (
@@ -181,6 +188,72 @@ class PasoCredenciales(PasoBase):
 
         self._verificado = False
         self._precargar()
+
+    def _comprobar(self) -> None:
+        """
+        Entra a Moodle de verdad y, de paso, trae la lista de cursos.
+
+        Pedir los cursos **es** la prueba de que el ingreso funcionó: no hace
+        falta una llamada aparte solo para comprobar la contraseña.
+        """
+        faltan = [
+            etiqueta
+            for etiqueta, campo in (
+                ("usuario de Moodle", self.moodle_usuario),
+                ("contraseña de Moodle", self.moodle_clave),
+                ("usuario de Notas Parciales", self.np_usuario),
+                ("contraseña de Notas Parciales", self.np_clave),
+                ("cédula", self.tutor),
+            )
+            if not campo.text().strip()
+        ]
+        if faltan:
+            self.estado.setText("Falta completar: " + ", ".join(faltan) + ".")
+            return
+
+        creds = self.wizard().credenciales_del_paso(self)
+        self.borrador.creds = creds
+        self.borrador.tutor = creds.np_tutor
+        self.boton.setEnabled(False)
+        self.correr(
+            probar_ingresos,
+            creds,
+            al_terminar=self._con_cursos,
+            mientras="Entrando a Moodle…",
+        )
+
+    def _con_cursos(self, cursos: list[MoodleCourse]) -> None:
+        self.boton.setEnabled(True)
+        self._verificado = True
+        self.borrador.cursos_moodle = list(cursos)
+
+        if self.recordar.isChecked() and credstore.disponible():
+            credstore.guardar(
+                credstore.SERVICIO_MOODLE,
+                self.moodle_usuario.text().strip(),
+                self.moodle_clave.text(),
+            )
+            credstore.guardar(
+                credstore.SERVICIO_NP,
+                self.np_usuario.text().strip(),
+                self.np_clave.text(),
+            )
+            guardadas = "  Quedaron guardadas en este equipo."
+        else:
+            guardadas = ""
+
+        cuantos = len(cursos)
+        detalle = (
+            f"Moodle aceptó tus datos y encontró {cuantos} curso(s)."
+            if cuantos
+            else "Moodle aceptó tus datos. La lista de cursos no se pudo leer, "
+            "pero el número de curso se puede escribir a mano."
+        )
+        self.estado.setText("✓ " + detalle + guardadas)
+
+    def _error(self, fallo: Fallo) -> None:
+        self.boton.setEnabled(True)
+        super()._error(fallo)
 
     def _precargar(self) -> None:
         """Si ya hay credenciales guardadas, no hacérselas escribir de nuevo."""
@@ -228,12 +301,65 @@ class PasoGrupos(PasoBase):
             "los demás son estudiantes de otra persona."
         )
 
+        self.cursos = QComboBox()
+        self.cursos.currentIndexChanged.connect(self._cambio_de_curso)
+
         self.lista = QListWidget()
         self.lista.itemChanged.connect(lambda _: self.completeChanged.emit())
 
+        form = QFormLayout()
+        form.addRow("Curso:", self.cursos)
+
         caja = QVBoxLayout(self)
+        caja.addLayout(form)
+        caja.addWidget(QLabel("Grupos del curso:"))
         caja.addWidget(self.lista)
         caja.addWidget(self.estado)
+
+    def initializePage(self) -> None:
+        """Al llegar, poblar el desplegable con los cursos que trajo el paso 1."""
+        self.cursos.blockSignals(True)
+        self.cursos.clear()
+        for c in self.borrador.cursos_moodle:
+            self.cursos.addItem(f"{c.name}   ({c.id})", c)
+        self.cursos.blockSignals(False)
+
+        if self.cursos.count():
+            self._cambio_de_curso()
+        else:
+            self.estado.setText(
+                "No se pudo leer tu lista de cursos. Escribí el número a mano en "
+                "courses.yml, o volvé atrás y probá de nuevo."
+            )
+
+    def _cambio_de_curso(self) -> None:
+        curso = self.cursos.currentData()
+        if curso is None or self.borrador.creds is None:
+            return
+        self.borrador.curso_moodle = curso
+        self.lista.clear()
+        self.correr(
+            traer_grupos,
+            self.borrador.creds,
+            curso.id,
+            al_terminar=self._con_grupos,
+            mientras="Buscando los grupos del curso…",
+        )
+
+    def _con_grupos(self, grupos: list[MoodleGroup]) -> None:
+        self.borrador.grupos_moodle = list(grupos)
+        if not grupos:
+            self.estado.setText(
+                "Este curso no tiene grupos en Moodle. Sin grupos no se puede "
+                "separar a tus estudiantes de los de otros profesores."
+            )
+            return
+        self.poblar(grupos, self.borrador.creds.moodle_username if self.borrador.creds else "")
+        marcados = len(self.marcados())
+        self.estado.setText(
+            f"Se marcaron {marcados} de {len(grupos)} por tu nombre. Revisá que "
+            "estén los tuyos, y solo los tuyos."
+        )
 
     def poblar(self, grupos: list[MoodleGroup], nombre_profesor: str) -> None:
         self.lista.clear()
@@ -254,8 +380,36 @@ class PasoGrupos(PasoBase):
             if self.lista.item(i).checkState() == Qt.CheckState.Checked
         ]
 
+    def validatePage(self) -> bool:
+        self.borrador.seleccionados = self.marcados()
+        return bool(self.borrador.seleccionados)
+
     def isComplete(self) -> bool:
         return bool(self.marcados()) and not self.ocupado
+
+
+def _apodo(borrador: Borrador) -> str:
+    """
+    Un nombre corto para el curso, como «cyber-2026-4».
+
+    Es lo que el profesor va a escribir después en la línea de comandos y lo
+    que nombra los archivos de salida, así que se arma de lo que él reconoce
+    —el nombre del curso en Moodle— y no del código interno de la asignatura.
+    """
+    import re
+    import unicodedata
+
+    crudo = borrador.curso_moodle.name if borrador.curso_moodle else "curso"
+    sin_tildes = "".join(
+        c for c in unicodedata.normalize("NFD", crudo.lower())
+        if unicodedata.category(c) != "Mn"
+    )
+    # Se saltan «a», «de», «la»: no distinguen nada y alargan el apodo.
+    palabras = [p for p in re.split(r"[^a-z0-9]+", sin_tildes) if len(p) > 2][:2]
+    base = "-".join(palabras) or "curso"
+
+    np = borrador.np
+    return f"{base}-{np.ano}-{np.pac}" if np else base
 
 
 def _parece_suyo(nombre_grupo: str, nombre_profesor: str) -> bool:
@@ -320,10 +474,70 @@ class PasoCodigos(PasoBase):
             self.campos[clave] = campo
             form.addRow(etiqueta, campo)
 
+        self.boton = QPushButton("Comprobar contra Notas Parciales")
+        self.boton.clicked.connect(self._comprobar)
+
         caja = QVBoxLayout(self)
         caja.addLayout(form)
+        caja.addWidget(self.boton)
         caja.addWidget(self.estado)
         self._verificado = False
+
+    def _comprobar(self) -> None:
+        """
+        El paso caro, y el que da sentido a escribir los códigos a mano.
+
+        Baja de Moodle, sondea Notas Parciales y cuenta. Si aparecen
+        estudiantes, los códigos son los correctos: el sistema responde igual
+        de bien a una asignatura que no existe, así que no hay otra prueba.
+        """
+        vacios = [e for k, e, _ in self.CAMPOS if not self.campos[k].text().strip()]
+        if vacios:
+            self.estado.setText("Falta completar: " + ", ".join(vacios))
+            return
+        if self.borrador.creds is None or self.borrador.curso_moodle is None:
+            self.estado.setText("Volvé a los pasos anteriores: falta información.")
+            return
+
+        try:
+            self.borrador.np = self.contexto()
+        except ValueError:
+            self.estado.setText(
+                "«Cátedra» y «Modelo» tienen que ser números. Copialos tal cual "
+                "aparecen en los menús de Captura de Notas."
+            )
+            return
+
+        self.borrador.course_id_local = _apodo(self.borrador)
+
+        self.boton.setEnabled(False)
+        self.correr(
+            verificar,
+            self.borrador.a_course(),
+            self.borrador.creds,
+            self.wizard().work_dir,
+            al_terminar=self._con_resultado,
+            mientras=(
+                "Bajando tus notas de Moodle y preguntándole a Notas Parciales "
+                "dónde está cada estudiante. Esto tarda un poco la primera vez; "
+                "no se escribe nada."
+            ),
+        )
+
+    def _con_resultado(self, check: ContextCheck) -> None:
+        self.boton.setEnabled(True)
+        self.borrador.check = check
+
+        if not check.ok:
+            self.estado.setText("✗ " + check.mensaje + "\n\n" + check.remedio)
+            return
+
+        self._verificado = True
+        self.estado.setText("✓ " + check.resumen)
+
+    def _error(self, fallo: Fallo) -> None:
+        self.boton.setEnabled(True)
+        super()._error(fallo)
 
     def valores(self) -> dict[str, str]:
         return {k: c.text().strip() for k, c in self.campos.items()}
@@ -378,6 +592,10 @@ class PasoReparto(PasoBase):
         caja.addWidget(self.tabla)
         caja.addWidget(self.huerfanos)
         caja.addWidget(self.estado)
+
+    def initializePage(self) -> None:
+        if self.borrador.check is not None:
+            self.mostrar(self.borrador.check)
 
     def mostrar(self, check: ContextCheck) -> None:
         self.tabla.setRowCount(0)
@@ -449,6 +667,10 @@ class PasoColumnas(PasoBase):
         caja.addWidget(self.aviso)
         caja.addWidget(self.estado)
 
+    def initializePage(self) -> None:
+        if self.borrador.check is not None:
+            self.mostrar(self.borrador.check)
+
     def mostrar(self, check: ContextCheck) -> None:
         self.tabla.setRowCount(0)
         for i in check.instrumentos:
@@ -481,6 +703,40 @@ class Asistente(QWizard):
         self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
         self.borrador = Borrador()
         self.work_dir = work_dir
+        self.config_path = Path("courses.yml").resolve()
+        self.escrito: Path | None = None
+
+    def accept(self) -> None:
+        """
+        Al terminar, escribe ``courses.yml``.
+
+        Es el objetivo del programa entero: que ese archivo exista sin que nadie
+        haya tenido que abrirlo. Lo que se guarda son códigos y destinos —nunca
+        contraseñas, ni la cédula del tutor, ni una sola de estudiante— porque
+        este archivo se comparte y se sube al repositorio (specs/002, R-15).
+
+        Si un curso con el mismo apodo ya estaba configurado, se reemplaza: es
+        lo que uno espera al volver a correr el asistente sobre el mismo curso.
+        """
+        from ..config import load_config, write_config
+        from ..errors import MnsyncError
+
+        try:
+            nuevo = self.borrador.a_course()
+        except ValueError:
+            super().accept()
+            return
+
+        try:
+            previos = [c for c in load_config(self.config_path).courses if c.id != nuevo.id]
+        except MnsyncError:
+            # No había configuración, o la que había no se puede leer. Empezamos
+            # de cero en vez de negarnos a guardar lo que el profesor acaba de
+            # verificar contra el servidor.
+            previos = []
+
+        self.escrito = write_config([*previos, nuevo], self.config_path)
+        super().accept()
 
     def credenciales_del_paso(self, paso: PasoCredenciales) -> Credentials:
         """Arma unas credenciales con lo que hay escrito en el primer paso."""

@@ -204,3 +204,84 @@ def test_reporta_cuales_credenciales_faltan(monkeypatch):
     monkeypatch.setenv("MOODLE_PASSWORD", "")
     faltan = missing_credentials(load_credentials(require=False))
     assert set(faltan) == {"NP_NTLM_PASSWORD", "MOODLE_PASSWORD"}
+
+
+# ---------------------------------------------------------------------------
+# Escritura de la configuración
+# ---------------------------------------------------------------------------
+def _curso_completo():
+    from mnsync.config import (
+        Course,
+        Destination,
+        MoodleGroupRef,
+        NotasParcialesCtx,
+        Policy,
+    )
+
+    return Course(
+        id="redes-2026-3",
+        moodle_course_id=8067,
+        np=NotasParcialesCtx(
+            ano="2026", pac="3", asignatura="00883", escuela="03",
+            catedra=253, encargado="ARODRIGUEZP", modelo=4,
+        ),
+        groups=(MoodleGroupRef(38525, "Grupo 1"), MoodleGroupRef(38526)),
+        destinations=(Destination("42", 1), Destination("42", 2), Destination("01", 1)),
+        policy=Policy(),
+    )
+
+
+def test_lo_escrito_se_vuelve_a_leer_igual(tmp_path):
+    """
+    Ida y vuelta sin pérdidas: es lo que el asistente escribe y el programa lee.
+
+    Si no cerrara el círculo, un profesor terminaría el asistente y la primera
+    sincronización fallaría por un archivo que el propio programa generó.
+    """
+    from mnsync.config import write_config
+
+    original = _curso_completo()
+    ruta = write_config([original], tmp_path / "courses.yml")
+    leido = load_config(ruta).course("redes-2026-3")
+
+    assert leido.moodle_course_id == original.moodle_course_id
+    assert [g.moodle_group_id for g in leido.groups] == [38525, 38526]
+    assert leido.groups[0].name == "Grupo 1"
+    assert [(d.cu, d.grupo) for d in leido.destinations] == [("42", 1), ("42", 2), ("01", 1)]
+    assert leido.np == original.np
+    assert leido.policy == original.policy
+
+
+def test_lo_escrito_conserva_los_ceros_a_la_izquierda(tmp_path):
+    """
+    «01» no puede volver como «1», ni «00883» como «883».
+
+    Si se perdiera un cero, el servidor devolvería tablas vacías sin dar ningún
+    error: el fallo más difícil de rastrear de todo el proyecto.
+    """
+    from mnsync.config import write_config
+
+    ruta = write_config([_curso_completo()], tmp_path / "courses.yml")
+    leido = load_config(ruta).course("redes-2026-3")
+
+    assert leido.np.asignatura == "00883"
+    assert leido.np.escuela == "03"
+    assert leido.destinations[2].cu == "01"
+
+
+def test_lo_escrito_no_lleva_datos_personales(tmp_path):
+    """
+    specs/002, R-15 — y la razón por la que se corrigió.
+
+    Este archivo se sube a un repositorio para que el flujo automático lo use.
+    Que no lleve ni la cédula del tutor ni las de los estudiantes no es un
+    detalle de higiene: es la condición para que pueda subirse.
+    """
+    from mnsync.config import write_config
+
+    ruta = write_config([_curso_completo()], tmp_path / "courses.yml")
+    texto = ruta.read_text(encoding="utf-8")
+
+    assert "tutor" not in texto
+    assert "password" not in texto.lower()
+    assert "contraseña" not in texto.lower() or "NO lleva contraseñas" in texto

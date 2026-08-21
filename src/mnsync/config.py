@@ -539,3 +539,87 @@ def load_config(path: Path | None = None) -> Config:
         vistos.add(c.id)
 
     return Config(courses=courses, source=p)
+
+
+# ---------------------------------------------------------------------------
+# Escritura
+# ---------------------------------------------------------------------------
+def course_to_dict(course: Course) -> dict[str, Any]:
+    """
+    Un curso, en la forma exacta que vuelve a leer ``load_config``.
+
+    Lo que **no** aparece acá es tan importante como lo que sí: ni credenciales,
+    ni la cédula del tutor, ni una sola cédula de estudiante. Este archivo se
+    comparte y se sube al repositorio para que el flujo automático lo use, y lo
+    que entra al historial de git no sale nunca (specs/002, R-15).
+
+    El enrutamiento individual no se guarda: se recalcula contra el servidor en
+    cada corrida. Solo se conserva la lista de destinos, que no es un dato
+    personal de nadie.
+    """
+    datos: dict[str, Any] = {
+        "id": course.id,
+        "moodle": {
+            "course_id": course.moodle_course_id,
+            "groups": [
+                {"id": g.moodle_group_id, **({"name": g.name} if g.name else {})}
+                for g in course.groups
+            ],
+        },
+        "notas_parciales": {
+            "ano": course.np.ano,
+            "pac": course.np.pac,
+            "tipo": course.np.tipo,
+            "asignatura": course.np.asignatura,
+            "escuela": course.np.escuela,
+            "catedra": course.np.catedra,
+            "encargado": course.np.encargado,
+            "modelo": course.np.modelo,
+        },
+    }
+    if course.destinations:
+        datos["destinos"] = [
+            {"cu": d.cu, "grupo": d.grupo} for d in course.destinations
+        ]
+    if course.item_map:
+        datos["item_map"] = dict(course.item_map)
+    datos["policy"] = {
+        "allow_update": course.policy.allow_update,
+        "justificacion_codigo": course.policy.justificacion_codigo,
+        "max_changes": course.policy.max_changes,
+    }
+    return datos
+
+
+def write_config(courses: tuple[Course, ...] | list[Course], path: Path) -> Path:
+    """
+    Escribe ``courses.yml``. Es lo que produce el asistente al terminar.
+
+    Se conserva el orden de los campos y se fuerzan las comillas en los códigos
+    que llevan ceros a la izquierda: si «01» se guardara como número, volvería
+    como «1» y el servidor devolvería tablas vacías sin dar ningún error.
+    """
+    try:
+        import yaml
+    except ImportError:  # pragma: no cover - dependencia declarada
+        raise ConfigError(
+            "Falta la librería PyYAML.",
+            remedio="Ejecutá:  pip install -e .",
+        ) from None
+
+    cuerpo = yaml.safe_dump(
+        {"courses": [course_to_dict(c) for c in courses]},
+        allow_unicode=True,
+        sort_keys=False,
+        default_flow_style=False,
+    )
+
+    encabezado = (
+        "# Generado por mnsync. Se puede editar a mano.\n"
+        "#\n"
+        "# NO lleva contraseñas, ni tu cédula, ni las de tus estudiantes:\n"
+        "# eso vive aparte, con las credenciales.\n\n"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(encabezado + cuerpo, encoding="utf-8")
+    return path

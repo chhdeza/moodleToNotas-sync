@@ -151,3 +151,47 @@ def test_una_columna_sin_emparejar_se_ve_como_tal():
 
     assert emparejada.descripcion == "Tar1 (Tarea 1 (2))"
     assert "no se subirá" in suelta.descripcion
+
+
+# ---------------------------------------------------------------------------
+# El apodo del curso
+# ---------------------------------------------------------------------------
+def _borrador(nombre: str, ano: str = "2026", pac: str = "4"):
+    from mnsync.config import NotasParcialesCtx
+    from mnsync.gui.asistente import Borrador
+    from mnsync.moodle_export import MoodleCourse
+
+    return Borrador(
+        curso_moodle=MoodleCourse(9639, nombre),
+        np=NotasParcialesCtx(
+            ano=ano, pac=pac, asignatura="00883", escuela="03",
+            catedra=253, encargado="X", modelo=4,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "nombre,esperado",
+    [
+        ("Introducción a la Ciberseguridad", "introduccion-ciberseguridad-2026-4"),
+        ("Redes de Computadoras", "redes-computadoras-2026-4"),
+        ("Bases de Datos & Sistemas", "bases-datos-2026-4"),
+    ],
+)
+def test_el_apodo_sale_del_nombre_que_el_profesor_reconoce(nombre, esperado):
+    """
+    Es lo que va a escribir en la terminal y lo que nombra sus archivos.
+
+    Sale del nombre del curso en Moodle y no del código interno de la
+    asignatura, porque «00883» no le dice nada a nadie.
+    """
+    from mnsync.gui.asistente import _apodo
+
+    assert _apodo(_borrador(nombre)) == esperado
+
+
+def test_un_curso_sin_nombre_igual_recibe_un_apodo():
+    """Nunca puede quedar vacío: nombra archivos y se escribe en la terminal."""
+    from mnsync.gui.asistente import _apodo
+
+    assert _apodo(_borrador("...")) == "curso-2026-4"
