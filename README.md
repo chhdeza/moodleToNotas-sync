@@ -11,6 +11,7 @@
 - [🛡️ ¿Puede dañar las notas de mis estudiantes?](#️-puede-dañar-las-notas-de-mis-estudiantes)
 - [⚙️ Antes de empezar](#️-antes-de-empezar)
 - [🚀 Instalación](#-instalación)
+- [🖥️ La aplicación de escritorio](#️-la-aplicación-de-escritorio-en-pruebas)
 - [🔑 Configuración 1: tus credenciales](#-configuración-1-tus-credenciales)
 - [🔎 Configuración 2: encontrar los datos de tu curso](#-configuración-2-encontrar-los-datos-de-tu-curso)
 - [📝 Configuración 3: el archivo courses.yml](#-configuración-3-el-archivo-coursesyml)
@@ -154,6 +155,43 @@ copy courses.example.yml courses.yml
 > ```bash
 > git submodule update --init --recursive
 > ```
+
+---
+
+## 🖥️ La aplicación de escritorio *(en pruebas)*
+
+Todo lo que sigue en este README se puede hacer también desde una ventana, sin
+escribir un solo comando y sin abrir `courses.yml` nunca.
+
+```bash
+.venv\Scripts\pip.exe install -e ".[gui]"   # una sola vez, agrega la parte gráfica
+.venv\Scripts\mnsync-app.exe
+```
+
+La primera vez se abre un **asistente de cinco pasos**: tus dos contraseñas, tu
+curso y tus grupos de Moodle, los códigos de la pantalla de Captura de Notas, a
+qué grupos oficiales va a parar cada estudiante, y qué columna de Moodle
+corresponde a cada instrumento. Al terminar escribe `courses.yml` solo.
+
+Después de eso, cada semana se abre directo en la **pantalla de siempre**: al
+abrirse ya comprobó tus contraseñas y ya bajó el plan, así que solo queda mirar
+la lista y pulsar un botón.
+
+| En la ventana | Qué hace |
+|---|---|
+| **Probar sin escribir nada** | El proceso completo contra el sistema real, con la escritura tapiada |
+| **Sincronizar** | Escribe. Pregunta antes, y avisa que después no hay vuelta atrás desde acá |
+| La columna **Autorizo** | Cambiar una nota **ya puesta** se autoriza fila por fila. No hay ninguna casilla que las autorice todas juntas |
+
+> [!IMPORTANT]
+> **Está en pruebas.** Si algo se ve raro, la línea de comandos hace exactamente
+> lo mismo y está documentada abajo: las dos usan el mismo motor, las mismas
+> rejas de seguridad y producen el mismo reporte. La ventana no toma ninguna
+> decisión por su cuenta.
+
+> [!TIP]
+> El asistente escribe `courses.yml` encima del que haya. Si ya tenías uno hecho
+> a mano y querés comparar, guardá una copia antes.
 
 ---
 

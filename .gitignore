@@ -1,8 +1,10 @@
 # ─── Secretos ────────────────────────────────────────────────
 .env
 
-# La configuración real de cada profesor: lleva su cédula en «tutor».
-courses.yml
+# La configuración real de cada profesor. Ya no lleva cédulas (specs/002, R-15),
+# pero sigue siendo suya: sus cursos, sus grupos y sus códigos.
+# El comodín cubre las copias de respaldo, que llevan lo mismo.
+courses.yml*
 
 # ─── Datos de estudiantes (cédulas, nombres, notas) ──────────
 # NUNCA deben llegar a Git.
@@ -11,6 +13,8 @@ courses.yml
 notas_plan*.csv
 reporte_*.md
 rehearsal_*.jsonl
+ensayo_*.jsonl
+resultados_*.csv
 calificaciones_*
 salida/
 out/

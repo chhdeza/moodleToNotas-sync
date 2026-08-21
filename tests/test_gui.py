@@ -195,3 +195,215 @@ def test_un_curso_sin_nombre_igual_recibe_un_apodo():
     from mnsync.gui.asistente import _apodo
 
     assert _apodo(_borrador("...")) == "curso-2026-4"
+
+
+# ---------------------------------------------------------------------------
+# La ventana semanal
+# ---------------------------------------------------------------------------
+from mnsync.config import Config, Credentials, Destination  # noqa: E402
+from mnsync.gui.ventana import (  # noqa: E402
+    ORDEN_ACCIONES,
+    Contexto,
+    EstadoIngresos,
+    Ventana,
+    _texto_recuento,
+    _vencida,
+    texto_confirmacion,
+)
+from mnsync.sync import FilaPlan  # noqa: E402
+
+DESTINO = Destination(cu="42", grupo=1)
+
+
+def _fila(cedula: str, accion: str, instrumento: str = "Tar1") -> FilaPlan:
+    return FilaPlan(
+        destino=DESTINO,
+        cedula=cedula,
+        nombre="ANA SOLANO",
+        instrumento=instrumento,
+        instrumento_nombre="Tarea 1 (2)",
+        nota_local="8.9",
+        nota_remota="7.5" if accion == "would_overwrite" else "",
+        accion=accion,
+        motivo="",
+    )
+
+
+@pytest.fixture
+def ventana(tmp_path):
+    """Una ventana sin cursos: acá se prueba la tabla, no la configuración."""
+    creds = Credentials(
+        moodle_url="http://127.0.0.1:9/moodle",
+        moodle_username="profesor.prueba",
+        moodle_password="x",
+        np_user="profesor.prueba",
+        np_password="x",
+    )
+    v = Ventana(Contexto(creds=creds, config=Config(courses=())), tmp_path)
+    yield v
+    v.close()
+
+
+def _con_filas(v: Ventana, filas: list[FilaPlan]) -> None:
+    v._filas = filas
+    v._repintar()
+
+
+def test_no_existe_ninguna_casilla_que_autorice_todo(ventana):
+    """
+    A-11 prohíbe una casilla global, así que se afirma su **ausencia**.
+
+    Es una prueba rara —comprueba que algo no está— y por eso vale: si alguien
+    agrega «autorizar todas» para ahorrar clics, esto lo detiene antes de que
+    llegue a una máquina donde se escriben notas de verdad.
+    """
+    from PySide6.QtWidgets import QCheckBox
+
+    _con_filas(ventana, [_fila("001", "would_overwrite"), _fila("002", "would_overwrite")])
+    assert ventana.findChildren(QCheckBox) == []
+
+
+def test_solo_las_sobrescrituras_se_pueden_autorizar(ventana):
+    """Una nota nueva no necesita permiso: no hay nada que pisar."""
+    from PySide6.QtCore import Qt
+
+    _con_filas(ventana, [_fila("001", "upload"), _fila("002", "would_overwrite")])
+
+    normal = ventana.tabla.item(0, 7)
+    sobrescritura = ventana.tabla.item(1, 7)
+    assert not (normal.flags() & Qt.ItemFlag.ItemIsUserCheckable)
+    assert sobrescritura.flags() & Qt.ItemFlag.ItemIsUserCheckable
+
+
+def test_las_autorizaciones_empiezan_apagadas(ventana):
+    """El silencio no autoriza cambiar una nota que alguien ya puso."""
+    _con_filas(ventana, [_fila("001", "would_overwrite"), _fila("002", "would_overwrite")])
+    assert ventana.autorizadas() == set()
+
+
+def test_se_autoriza_una_sin_arrastrar_a_las_otras(ventana):
+    from PySide6.QtCore import Qt
+
+    _con_filas(ventana, [_fila("001", "would_overwrite"), _fila("002", "would_overwrite")])
+    ventana.tabla.item(0, 7).setCheckState(Qt.CheckState.Checked)
+
+    assert ventana.autorizadas() == {("001", "Tar1")}
+
+
+def test_cambiar_el_filtro_no_pierde_lo_ya_autorizado(ventana):
+    """
+    El filtro es una lupa, no un borrador.
+
+    Si al acercar la vista se perdiera una autorización dada, el profesor
+    escribiría menos de lo que decidió y sin enterarse.
+    """
+    from PySide6.QtCore import Qt
+
+    _con_filas(ventana, [_fila("001", "would_overwrite"), _fila("002", "upload")])
+    ventana.tabla.item(0, 7).setCheckState(Qt.CheckState.Checked)
+
+    ventana.ver.setCurrentIndex(2)   # solo lo que hay que revisar
+    ventana.ver.setCurrentIndex(0)   # y de vuelta a todo
+
+    assert ventana.autorizadas() == {("001", "Tar1")}
+
+
+def test_el_boton_dice_cuantas_sobrescrituras_lleva(ventana):
+    """Lo que se está por hacer se lee en el botón, no solo en la tabla."""
+    from PySide6.QtCore import Qt
+
+    _con_filas(ventana, [_fila("001", "would_overwrite")])
+    ventana._permitir_escritura(True)
+    assert ventana.boton_sync.text() == "Sincronizar"
+
+    ventana.tabla.item(0, 7).setCheckState(Qt.CheckState.Checked)
+    assert "1 sobrescritura" in ventana.boton_sync.text()
+
+
+# ---------------------------------------------------------------------------
+# Los textos de la ventana
+# ---------------------------------------------------------------------------
+def test_el_recuento_muestra_las_siete_acciones_aunque_den_cero():
+    """
+    A-10: la vista no reduce el plan a «se sube» y «no se sube».
+
+    Un cero al lado de «cambiaría una nota existente» no es relleno: es la
+    respuesta a la pregunta que más preocupa antes de sincronizar.
+    """
+    texto = _texto_recuento([_fila("001", "upload")])
+
+    from mnsync.report import ACCIONES
+
+    for accion in ORDEN_ACCIONES:
+        assert ACCIONES[accion][0] in texto
+    assert len(ORDEN_ACCIONES) == 7
+
+
+def test_una_accion_que_no_conocemos_igual_se_cuenta():
+    """Si el script agrega una acción, aparece; no se traga en silencio."""
+    texto = _texto_recuento([_fila("001", "accion_nueva")])
+    assert "accion_nueva" in texto
+
+
+def test_la_confirmacion_advierte_que_no_hay_vuelta_atras():
+    """A-13: lo que hay que decir es qué no se puede deshacer desde acá."""
+    _, advertencia = texto_confirmacion([_fila("001", "upload")], set())
+
+    assert "NO puede deshacerla" in advertencia
+    assert "a mano" in advertencia
+
+
+def test_la_confirmacion_cuenta_lo_que_se_deja_como_esta():
+    filas = [_fila("001", "would_overwrite"), _fila("002", "would_overwrite")]
+    resumen, _ = texto_confirmacion(filas, {("001", "Tar1")})
+
+    assert "autorizaste 1" in resumen
+    assert "El resto queda como está" in resumen
+
+
+def test_una_contrasena_rechazada_se_nombra_como_tal():
+    """A-14: «parece que cambió tu contraseña», no un fallo indescifrable."""
+    from mnsync.errors import MoodleError
+
+    texto = _vencida(MoodleError("Moodle rechazó el usuario o la contraseña."))
+    assert "cambió tu contraseña" in texto
+
+
+def test_un_servidor_caido_no_se_confunde_con_una_contrasena_vencida():
+    """
+    Mandar a cambiar una contraseña que estaba bien es peor que no decir nada.
+
+    El profesor la cambia, pierde el acceso a los otros sistemas de la UNED, y
+    el problema original —que el servidor no respondía— sigue igual.
+    """
+    from mnsync.errors import UploaderError
+
+    texto = _vencida(UploaderError("El servidor de la UNED no respondió a tiempo."))
+    assert "contraseña" not in texto
+
+
+def test_sin_curso_configurado_no_se_le_reprocha_nada_a_notas_parciales():
+    """No se le preguntó, así que no puede decirse que falló."""
+    estado = EstadoIngresos(moodle_ok=True, np_consultado=False)
+
+    assert estado.ok
+    assert "sin curso configurado" in estado.texto
+
+
+def test_cambiar_de_curso_no_deja_autorizaciones_colgando(ventana):
+    """
+    Vaciar la tabla destruye sus celdas del lado de Qt.
+
+    Si las autorizaciones siguieran apuntando a celdas destruidas, la siguiente
+    lectura reventaría con un error de C++ que no significa nada para nadie —y
+    lo haría justo al pulsar «Sincronizar».
+    """
+    from PySide6.QtCore import Qt
+
+    _con_filas(ventana, [_fila("001", "would_overwrite")])
+    ventana.tabla.item(0, 7).setCheckState(Qt.CheckState.Checked)
+
+    ventana._cambio_de_curso()
+
+    assert ventana.autorizadas() == set()
+    assert ventana.tabla.rowCount() == 0

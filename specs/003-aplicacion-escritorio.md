@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Estado** | Borrador — etapa 2 implementada |
-| **Versión** | 0.2 |
+| **Estado** | Borrador — etapas 2 y 3 implementadas |
+| **Versión** | 0.3 |
 | **Fecha** | 2026-08-21 |
 | **Depende de** | [001 — Modelo de dominio](001-modelo-de-dominio.md), [002 — Enrutamiento multi-destino](002-enrutamiento-multi-destino.md) |
 | **Bloqueado por** | 002 tiene que estar implementado antes de empezar. |
@@ -109,7 +109,14 @@ antes de darse por terminado.
 **A-09.** El uso semanal **DEBE** reducirse a un botón, sin opciones ni banderas.
 
 **A-10.** Antes de escribir, la aplicación **DEBE** mostrar una vista de diferencias
-con las nueve acciones posibles del plan, no una reducción a dos.
+con las **siete** acciones posibles del plan, no una reducción a dos: `upload`,
+`mark_not_presented`, `would_overwrite`, `review`, `skip_already_set`, `skip_retirado`
+y `skip_not_in_roster` (`notasparciales_upload.py:1157-1164`). Las que dan cero
+**DEBEN** mostrarse igual, con su cero.
+
+> *Fundamento.* Ver un cero al lado de «cambiaría una nota existente» es la respuesta
+> a la pregunta que más preocupa antes de sincronizar. Enseñar solo las acciones que
+> salieron dejaría al profesor sin saber si la que le importa no salió o no se mira.
 
 **A-11.** Las sobrescrituras de notas ya puestas **DEBEN** autorizarse fila por fila.
 **NO DEBE** existir una casilla global que autorice todas a la vez.
@@ -117,6 +124,16 @@ con las nueve acciones posibles del plan, no una reducción a dos.
 > *Fundamento.* «Este estudiante tiene 8.5 y Moodle dice 9.0» es una decisión
 > individual. Cada autorización queda justificada con su código en el sistema de la
 > UNED, como manda el procedimiento.
+>
+> *Cómo se cumple.* El permiso para sobrescribir es una sola bandera del script
+> (`--allow-update`) y vale para el plan entero, así que la granularidad se consigue
+> del otro lado: se le entrega un plan que **solo contiene** las sobrescrituras
+> autorizadas (`sync.py:_plan_a_ejecutar`), y entonces la bandera global es exacta.
+> El archivo recortado queda en disco como respaldo de qué se autorizó.
+>
+> Una lista explícita de autorizaciones **NO DEBE** quedar ampliada por
+> `policy.allow_update` de `courses.yml`: la decisión tomada mirando las filas
+> concretas le gana a la que se escribió una vez en un archivo.
 
 **A-12.** La aplicación **DEBE** ofrecer un botón «Probar sin escribir nada» que
 ejecute la reja de escritura (`_uploader_shim.py:69-113`) contra el servidor real,
@@ -209,5 +226,6 @@ consumir la misma configuración que produce el asistente.
 
 | Versión | Fecha | Cambio |
 |---------|-------|--------|
+| 0.3 | 2026-08-21 | A-10 decía «nueve acciones» y el script produce **siete**: un requisito con un número equivocado no se puede verificar, así que se enumeran. Se documenta en A-11 cómo se consigue la autorización fila por fila sobre una bandera que es global, y que la política del curso no puede ampliarla. Etapa 3 implementada en `gui/asistente.py` y `gui/ventana.py`. |
 | 0.2 | 2026-08-21 | A-05 se resuelve escribiendo los códigos con verificación inmediata, no reproduciendo los menús de la página: evita atarse a un HTML que nunca vimos. Se agrega A-05.1. Etapa 2 implementada en `discovery.py`. |
 | 0.1 | 2026-08-21 | Borrador inicial. |

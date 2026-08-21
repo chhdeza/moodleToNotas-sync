@@ -753,6 +753,21 @@ class Asistente(QWizard):
         )
 
 
+def construir_asistente(work_dir: Path) -> Asistente:
+    """
+    El asistente con sus cinco pasos puestos, listo para mostrarse.
+
+    Vive acá y no en el arranque del programa porque también se abre desde la
+    ventana principal, y dos listas de pasos que hay que acordarse de mantener
+    iguales terminan siendo dos asistentes distintos.
+    """
+    asistente = Asistente(work_dir)
+    for paso in (PasoCredenciales, PasoGrupos, PasoCodigos, PasoReparto, PasoColumnas):
+        asistente.addPage(paso(asistente.borrador))
+    asistente.resize(760, 560)
+    return asistente
+
+
 # ---------------------------------------------------------------------------
 # El trabajo que hace cada paso
 # ---------------------------------------------------------------------------
