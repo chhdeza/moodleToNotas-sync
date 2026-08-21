@@ -21,11 +21,18 @@ algo, y siempre por destino, que es la unidad en la que aterriza una escritura
 Nada se escribe hasta que la fase B terminó completa: así una configuración
 equivocada se descubre antes de haber escrito la primera nota, y no queda una
 corrida a medio aplicar.
+
+La frontera entre B y C es además un lugar donde se puede **parar**. Por eso hay
+dos funciones y no una: ``preparar`` deja la corrida averiguada y quieta, y
+``aplicar`` la ejecuta. La línea de comandos las llama seguidas —eso es
+``sync_course``—; la ventana se mete en el medio para enseñar lo que va a pasar
+y esperar a que el profesor autorice las sobrescrituras una por una
+(specs/003, A-11). Las dos recorren exactamente el mismo camino.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import Course, Credentials, Destination, MoodleGroupRef
@@ -33,6 +40,7 @@ from .errors import ConfigError, MnsyncError, ScopeError
 from .guard import (
     GuardVerdict,
     Routing,
+    RoutingVerdict,
     check,
     check_routing,
     merge_routing,
@@ -48,7 +56,13 @@ from .moodle_export import (
     write_moodle_xlsx,
 )
 from .report import DestinationOutcome, RunReport
-from .uploader import Uploader, cu_de_institucion
+from .uploader import (
+    ACCION_SOBRESCRIBIRIA,
+    Uploader,
+    cu_de_institucion,
+    escribir_plan_autorizado,
+    leer_plan,
+)
 
 
 @dataclass
@@ -220,6 +234,222 @@ def resolve_destinations(
     return uploader.discover_destinations(sorted(xlsx_por_cu), xlsx_por_cu)
 
 
+@dataclass(frozen=True)
+class FilaPlan:
+    """
+    Una fila del plan, con su destino puesto, lista para enseñarse.
+
+    Es lo que ve el profesor en la vista de diferencias: un estudiante, un
+    instrumento, qué hay ahora y qué habría después. Se separa del ``dict`` que
+    devuelve el CSV para que la ventana no tenga que saber cómo se llaman las
+    columnas de un archivo del script.
+    """
+
+    destino: Destination
+    cedula: str
+    nombre: str
+    instrumento: str
+    instrumento_nombre: str
+    nota_local: str
+    nota_remota: str
+    accion: str
+    motivo: str
+
+    @property
+    def clave(self) -> tuple[str, str]:
+        """Lo que identifica a la fila: una nota de una persona (specs/003, A-11)."""
+        return (self.cedula, self.instrumento)
+
+    @property
+    def es_sobrescritura(self) -> bool:
+        return self.accion == ACCION_SOBRESCRIBIRIA
+
+
+@dataclass
+class Preparacion:
+    """
+    La corrida detenida justo antes de escribir: todo averiguado, nada tocado.
+
+    Existe porque autorizar fila por fila (specs/003, A-11) exige que alguien
+    mire los planes **entre** calcularlos y ejecutarlos. La línea de comandos
+    hace las dos cosas seguidas; la ventana se mete en el medio, enseña lo que
+    va a pasar y espera. Las dos usan el mismo motor: acá no se decide nada
+    nuevo, solo se guarda el resultado de la fase B.
+    """
+
+    course: Course
+    uploader: Uploader
+    exports: list[GroupExport]
+    destinos: tuple[Destination, ...]
+    #: ``(destino, plan.csv)`` de cada destino que sí llegó a planificarse.
+    planes: list[tuple[Destination, Path]]
+    routing: Routing
+    routing_verdict: RoutingVerdict
+    #: Destinos que fallaron al planificar. Ya vienen como resultado.
+    fallidos: list[DestinationOutcome] = field(default_factory=list)
+
+    @property
+    def detenida(self) -> bool:
+        """
+        Si el patrón de fallos desaconseja escribir **nada** (specs/002, R-09).
+
+        Cuando ningún estudiante emparejó en ningún lado, el recuento de
+        cambios no significa lo que parece, y ofrecer un botón de sincronizar
+        sobre esos números sería ofrecer un desastre prolijamente presentado.
+        """
+        return self.routing_verdict.blocked and self.routing.todo_sin_destino
+
+    def filas(self) -> list[FilaPlan]:
+        """Todas las filas de todos los planes, para la vista de diferencias."""
+        salida: list[FilaPlan] = []
+        for destino, plan_path in self.planes:
+            for f in leer_plan(plan_path):
+                salida.append(
+                    FilaPlan(
+                        destino=destino,
+                        cedula=f.get("cedula", ""),
+                        nombre=f.get("nombre", ""),
+                        instrumento=f.get("instrumento", ""),
+                        instrumento_nombre=f.get("instrumento_nombre", ""),
+                        nota_local=f.get("nota_local", ""),
+                        nota_remota=f.get("nota_remota", ""),
+                        accion=f.get("accion", ""),
+                        motivo=f.get("motivo", ""),
+                    )
+                )
+        return salida
+
+    def sobrescrituras(self) -> list[FilaPlan]:
+        """Las notas ya puestas que cambiarían. Cada una necesita su permiso."""
+        return [f for f in self.filas() if f.es_sobrescritura]
+
+
+def preparar(
+    course: Course,
+    creds: Credentials,
+    work_dir: Path,
+    *,
+    groups: list[MoodleGroupRef] | None = None,
+    fence_journal: Path | None = None,
+    session: MoodleSession | None = None,
+) -> Preparacion:
+    """
+    Fases A y B: recolectar, agrupar y enrutar. **No escribe nada.**
+
+    Todo lo que hace son lecturas y planes, así que se puede llamar tantas
+    veces como haga falta sin consecuencias.
+    """
+    # --- Fase A: recolectar y agrupar ---------------------------------------
+    exports = fetch_groups(course, creds, work_dir, groups=groups, session=session)
+    xlsx_por_cu = split_por_cu(exports, work_dir, course.id, conservar=set(course.item_map))
+
+    uploader = Uploader(course, creds, work_dir, fence_journal=fence_journal)
+
+    # --- Fase B: enrutar ----------------------------------------------------
+    destinos = resolve_destinations(course, uploader, xlsx_por_cu)
+
+    planes: list[tuple[Destination, Path]] = []
+    fallidos: list[DestinationOutcome] = []
+    for destino in destinos:
+        xlsx = xlsx_por_cu.get(destino.cu)
+        if xlsx is None:
+            continue
+        try:
+            plan_path, _ = uploader.plan(destino, [xlsx])
+        except MnsyncError as e:
+            fallidos.append(
+                DestinationOutcome(
+                    summary=_resumen_vacio(destino),
+                    verdict=GuardVerdict(allowed=False),
+                    error=str(e),
+                )
+            )
+            continue
+        planes.append((destino, plan_path))
+
+    routing = merge_routing(planes) if planes else Routing()
+    routing = _completar_con_moodle(routing, exports)
+
+    return Preparacion(
+        course=course,
+        uploader=uploader,
+        exports=exports,
+        destinos=tuple(destinos),
+        planes=planes,
+        routing=routing,
+        routing_verdict=check_routing(routing),
+        fallidos=fallidos,
+    )
+
+
+def aplicar(
+    prep: Preparacion,
+    *,
+    commit: bool = False,
+    allow_update: bool | None = None,
+    autorizadas: set[tuple[str, str]] | None = None,
+) -> RunReport:
+    """
+    Fase C: ejecutar los planes ya calculados.
+
+    ``allow_update`` autoriza **todas** las sobrescrituras de golpe: es lo que
+    usa la línea de comandos, donde quien ejecuta ya abrió el plan en Excel.
+
+    ``autorizadas`` autoriza una por una, por ``(cédula, instrumento)``, y es lo
+    que usa la ventana (specs/003, A-11). Si se pasa, manda sobre
+    ``allow_update``: una lista explícita de permisos no puede quedar ampliada
+    por una bandera puesta en otro lado. Pasar un conjunto vacío es una
+    respuesta válida —«ninguna»— y distinta de no pasar nada.
+    """
+    course = prep.course
+    if allow_update is None:
+        allow_update = course.policy.allow_update
+    if autorizadas is not None:
+        allow_update = False
+
+    # La marca de ensayo sale de la misma reja que lo hace ensayo: así el
+    # reporte no puede decir que escribió mientras la escritura está tapiada.
+    report = RunReport(
+        course=course, commit=commit, ensayo=prep.uploader.fence_journal is not None
+    )
+    report.grupos_moodle = tuple(ge.group for ge in prep.exports)
+    report.destinos = prep.destinos
+    report.routing = prep.routing
+    report.routing_verdict = prep.routing_verdict
+    report.outcomes.extend(prep.fallidos)
+
+    # Un patrón que delata códigos de contexto equivocados detiene todo: si
+    # ningún estudiante emparejó en ningún lado, el recuento de cambios no
+    # significa lo que parece (specs/002, R-09).
+    if prep.detenida:
+        v = prep.routing_verdict
+        for destino, plan_path in prep.planes:
+            report.outcomes.append(
+                DestinationOutcome(
+                    summary=summarize_plan(plan_path, destino),
+                    verdict=GuardVerdict(allowed=False, reason=v.reason, remedy=v.remedy),
+                    escrito=False,
+                    allow_update=allow_update,
+                )
+            )
+        return report
+
+    for destino, plan_path in prep.planes:
+        report.outcomes.append(
+            _sync_one_destination(
+                prep.uploader,
+                destino,
+                plan_path,
+                commit=commit,
+                allow_update=allow_update,
+                autorizadas=autorizadas,
+                course=course,
+            )
+        )
+
+    return report
+
+
 def sync_course(
     course: Course,
     creds: Credentials,
@@ -234,82 +464,14 @@ def sync_course(
     """
     Sincroniza un curso entero (o solo los grupos de Moodle indicados).
 
-    Sin ``commit=True`` no se escribe nada: es el modo por defecto, heredado
-    del script de Notas Parciales.
+    Es la corrida completa de un tirón: preparar y aplicar sin pausa. Sin
+    ``commit=True`` no se escribe nada, que es el modo por defecto heredado del
+    script de Notas Parciales.
     """
-    if allow_update is None:
-        allow_update = course.policy.allow_update
-
-    report = RunReport(course=course, commit=commit)
-
-    # --- Fase A: recolectar y agrupar ---------------------------------------
-    exports = fetch_groups(course, creds, work_dir, groups=groups, session=session)
-    report.grupos_moodle = tuple(ge.group for ge in exports)
-    xlsx_por_cu = split_por_cu(exports, work_dir, course.id, conservar=set(course.item_map))
-
-    uploader = Uploader(course, creds, work_dir, fence_journal=fence_journal)
-
-    # --- Fase B: enrutar ----------------------------------------------------
-    destinos = resolve_destinations(course, uploader, xlsx_por_cu)
-    report.destinos = tuple(destinos)
-
-    planes: list[tuple[Destination, Path]] = []
-    for destino in destinos:
-        xlsx = xlsx_por_cu.get(destino.cu)
-        if xlsx is None:
-            continue
-        try:
-            plan_path, _ = uploader.plan(destino, [xlsx])
-        except MnsyncError as e:
-            report.outcomes.append(
-                DestinationOutcome(
-                    summary=_resumen_vacio(destino),
-                    verdict=GuardVerdict(allowed=False),
-                    allow_update=allow_update,
-                    error=str(e),
-                )
-            )
-            continue
-        planes.append((destino, plan_path))
-
-    routing = merge_routing(planes) if planes else Routing()
-    routing = _completar_con_moodle(routing, exports)
-    report.routing = routing
-
-    veredicto = check_routing(routing)
-    report.routing_verdict = veredicto
-
-    # Un patrón que delata códigos de contexto equivocados detiene todo: si
-    # ningún estudiante emparejó en ningún lado, el recuento de cambios no
-    # significa lo que parece (specs/002, R-09).
-    if veredicto.blocked and routing.todo_sin_destino:
-        for destino, plan_path in planes:
-            report.outcomes.append(
-                DestinationOutcome(
-                    summary=summarize_plan(plan_path, destino),
-                    verdict=GuardVerdict(
-                        allowed=False, reason=veredicto.reason, remedy=veredicto.remedy
-                    ),
-                    escrito=False,
-                    allow_update=allow_update,
-                )
-            )
-        return report
-
-    # --- Fase C: escribir ---------------------------------------------------
-    for destino, plan_path in planes:
-        report.outcomes.append(
-            _sync_one_destination(
-                uploader,
-                destino,
-                plan_path,
-                commit=commit,
-                allow_update=allow_update,
-                course=course,
-            )
-        )
-
-    return report
+    prep = preparar(
+        course, creds, work_dir, groups=groups, fence_journal=fence_journal, session=session
+    )
+    return aplicar(prep, commit=commit, allow_update=allow_update)
 
 
 def _completar_con_moodle(routing: Routing, exports: list[GroupExport]) -> Routing:
@@ -341,6 +503,7 @@ def _sync_one_destination(
     *,
     commit: bool,
     allow_update: bool,
+    autorizadas: set[tuple[str, str]] | None,
     course: Course,
 ) -> DestinationOutcome:
     """
@@ -350,30 +513,77 @@ def _sync_one_destination(
     Que un grupo oficial tenga un problema no es razón para dejar los otros sin
     subir.
     """
-    summary = summarize_plan(plan_path, destination)
-    verdict = check(summary, course.policy)
+    propuesto = summarize_plan(plan_path, destination)
+    ejecutable, permitir = _plan_a_ejecutar(
+        plan_path, allow_update=allow_update, autorizadas=autorizadas
+    )
+    aplicado = propuesto if ejecutable == plan_path else summarize_plan(ejecutable, destination)
+
+    # El radio de daño se mide sobre lo que de verdad se va a escribir, no
+    # sobre lo que el plan llegó a proponer: una sobrescritura que el profesor
+    # no autorizó no cambia ninguna nota, y contarla haría saltar el freno por
+    # algo que no va a pasar.
+    verdict = check(aplicado, course.policy)
 
     if verdict.blocked:
         return DestinationOutcome(
-            summary=summary, verdict=verdict, escrito=False, allow_update=allow_update
+            summary=propuesto,
+            verdict=verdict,
+            escrito=False,
+            allow_update=permitir,
+            aplicado=aplicado,
         )
 
     try:
         resultados, _ = uploader.apply(
-            destination, plan_path, commit=commit, allow_update=allow_update
+            destination, ejecutable, commit=commit, allow_update=permitir
         )
     except MnsyncError as e:
         return DestinationOutcome(
-            summary=summary, verdict=verdict, allow_update=allow_update, error=str(e)
+            summary=propuesto,
+            verdict=verdict,
+            allow_update=permitir,
+            aplicado=aplicado,
+            error=str(e),
         )
 
     return DestinationOutcome(
-        summary=summary,
+        summary=propuesto,
         verdict=verdict,
         escrito=commit,
-        allow_update=allow_update,
+        allow_update=permitir,
+        aplicado=aplicado,
         resultados_path=resultados,
     )
+
+
+def _plan_a_ejecutar(
+    plan_path: Path,
+    *,
+    allow_update: bool,
+    autorizadas: set[tuple[str, str]] | None,
+) -> tuple[Path, bool]:
+    """
+    Qué archivo se le entrega al script, y con qué permiso de sobrescritura.
+
+    Sin autorizaciones fila por fila se entrega el plan tal cual: es la línea
+    de comandos, y ahí la bandera vale para todo el archivo.
+
+    Con autorizaciones se escribe una copia recortada, y entonces la bandera
+    global ya es exacta: solo puede alcanzar a las filas que quedaron adentro
+    (specs/003, A-11). Se enciende únicamente si alguna sobrevivió, para que un
+    plan sin sobrescrituras autorizadas ni siquiera pida el permiso.
+    """
+    if autorizadas is None:
+        return plan_path, allow_update
+
+    recortado = escribir_plan_autorizado(
+        plan_path,
+        autorizadas,
+        plan_path.with_name(plan_path.stem + "_autorizado.csv"),
+    )
+    quedan = any(f.get("accion") == ACCION_SOBRESCRIBIRIA for f in leer_plan(recortado))
+    return recortado, quedan
 
 
 def _resumen_vacio(destination: Destination):

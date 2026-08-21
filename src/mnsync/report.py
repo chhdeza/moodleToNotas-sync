@@ -54,6 +54,13 @@ class DestinationOutcome:
     allow_update: bool = False
     resultados_path: Path | None = None
     error: str | None = None
+    #: El recuento del plan que de verdad se le entregó al script.
+    #:
+    #: Difiere de ``summary`` cuando el profesor autorizó las sobrescrituras
+    #: una por una (specs/003, A-11): ``summary`` cuenta lo que se propuso y
+    #: este cuenta lo que se ejecutó. Sin esta separación el reporte diría que
+    #: escribió notas que el profesor dejó pasar.
+    aplicado: PlanSummary | None = None
 
     @property
     def destination(self) -> Destination:
@@ -70,10 +77,20 @@ class DestinationOutcome:
         return (*base, "would_overwrite") if self.allow_update else base
 
     @property
+    def ejecutado(self) -> PlanSummary:
+        """El plan que se ejecutó, que no siempre es el que se propuso."""
+        return self.aplicado or self.summary
+
+    @property
     def n_escritas(self) -> int:
         if not self.escrito:
             return 0
-        return sum(self.summary.por_accion.get(a, 0) for a in self.acciones_escritas)
+        return sum(self.ejecutado.por_accion.get(a, 0) for a in self.acciones_escritas)
+
+    @property
+    def sobrescrituras_declinadas(self) -> int:
+        """Notas ya puestas que cambiarían y que el profesor decidió no tocar."""
+        return max(0, self.summary.sobrescribirian - self.ejecutado.sobrescribirian)
 
 
 @dataclass
@@ -92,6 +109,13 @@ class RunReport:
     routing: Routing | None = None
     #: El fallo del discriminador de patrón.
     routing_verdict: RoutingVerdict | None = None
+    #: Si la corrida llevaba la reja de escritura puesta.
+    #:
+    #: Un ensayo recorre el camino de escritura entero con ``commit=True``, así
+    #: que sin esta marca su reporte sería indistinguible del de una corrida
+    #: real. Y este archivo es el respaldo de qué se tocó: decir que escribió lo
+    #: que no escribió lo vuelve inservible justo cuando hace falta.
+    ensayo: bool = False
 
     @property
     def total_cambios(self) -> int:
@@ -143,9 +167,18 @@ class RunReport:
         )
 
     # --- salida ---------------------------------------------------------
+    @property
+    def modo(self) -> str:
+        """Cómo hay que leer los números de este reporte."""
+        if self.ensayo:
+            return "ENSAYO — la escritura quedó tapiada, no se escribió nada"
+        if self.commit:
+            return "SE ESCRIBIERON las notas"
+        return "prueba (no se escribió nada)"
+
     def to_markdown(self) -> str:
         L: list[str] = []
-        modo = "SE ESCRIBIERON las notas" if self.commit else "prueba (no se escribió nada)"
+        modo = self.modo
         L.append(f"# Sincronización — {self.course.id}")
         L.append("")
         L.append(f"**Fecha:** {self.started:%d/%m/%Y %H:%M}  ")
@@ -167,6 +200,8 @@ class RunReport:
                 estado = "❌ error"
             elif o.verdict.blocked:
                 estado = "🛑 detenido por un freno"
+            elif o.escrito and self.ensayo:
+                estado = f"🧪 ensayo ({o.n_escritas} se habrían escrito)"
             elif o.escrito:
                 estado = f"✅ escrito ({o.n_escritas})"
             else:
@@ -183,14 +218,21 @@ class RunReport:
 
         L.append("---")
         L.append("")
-        if self.commit and not self.hubo_bloqueos and not self.hubo_errores:
+        if self.ensayo:
+            L.append(
+                f"Esto fue un **ensayo**: se recorrió el camino de escritura completo "
+                f"contra el sistema real, pero cada envío quedó interceptado. Se "
+                f"habrían escrito **{self.total_escritas}** nota(s)."
+            )
+        elif self.commit and not self.hubo_bloqueos and not self.hubo_errores:
             L.append(f"Se escribieron **{self.total_escritas}** notas en Notas Parciales.")
             pendientes = self.total_cambios - self.total_escritas
             if pendientes > 0:
                 L.append("")
                 L.append(
                     f"Quedaron **{pendientes}** sin escribir porque cambiarían una nota "
-                    "que ya estaba puesta. Para aplicarlas hay que autorizarlo con "
+                    "que ya estaba puesta. Hay que autorizarlas: en la ventana, con la "
+                    "columna «Autorizo» de cada fila; desde la terminal, con "
                     "`--allow-update`."
                 )
         elif not self.commit:
@@ -268,7 +310,7 @@ class RunReport:
 
         escritas = self._filas_escritas(o)
         if escritas:
-            L.append("### Notas escritas")
+            L.append("### Notas que se habrían escrito" if self.ensayo else "### Notas escritas")
             L.append("")
             L.append("| Cédula | Instrumento | Antes | Ahora |")
             L.append("|---|---|---|---|")
@@ -278,6 +320,14 @@ class RunReport:
                     f"{fila['nota_remota'] or '—'} | {fila['nota_local']} |"
                 )
             L.append("")
+
+        if o.sobrescrituras_declinadas:
+            L += [
+                f"> {o.sobrescrituras_declinadas} nota(s) ya puestas se dejaron como "
+                "estaban porque no se autorizó cambiarlas. No es un error: es la "
+                "decisión que se tomó fila por fila antes de escribir.",
+                "",
+            ]
 
         atencion = self._filas_de_atencion(o)
         if atencion:
@@ -297,16 +347,23 @@ class RunReport:
 
         return L
 
-    def _leer_plan(self, o: DestinationOutcome) -> list[dict[str, str]]:
-        if not o.summary.plan_path.exists():
+    def _leer_plan(
+        self, o: DestinationOutcome, path: Path | None = None
+    ) -> list[dict[str, str]]:
+        ruta = path or o.summary.plan_path
+        if not ruta.exists():
             return []
-        with o.summary.plan_path.open("r", encoding="utf-8-sig", newline="") as f:
+        with ruta.open("r", encoding="utf-8-sig", newline="") as f:
             return [{k: (v or "").strip() for k, v in r.items()} for r in csv.DictReader(f)]
 
     def _filas_escritas(self, o: DestinationOutcome) -> list[dict[str, str]]:
         if not o.escrito:
             return []
-        return [r for r in self._leer_plan(o) if r.get("accion") in o.acciones_escritas]
+        return [
+            r
+            for r in self._leer_plan(o, o.ejecutado.plan_path)
+            if r.get("accion") in o.acciones_escritas
+        ]
 
     def _filas_de_atencion(self, o: DestinationOutcome) -> list[dict[str, str]]:
         return [r for r in self._leer_plan(o) if r.get("accion") in REQUIEREN_ATENCION]
@@ -319,6 +376,8 @@ class RunReport:
                 icono, detalle = "❌", o.error
             elif o.verdict.blocked:
                 icono, detalle = "🛑", o.verdict.reason
+            elif o.escrito and self.ensayo:
+                icono, detalle = "🧪", f"{o.n_escritas} nota(s) se habrían escrito"
             elif o.escrito:
                 icono, detalle = "✅", f"{o.n_escritas} nota(s) escritas"
             else:

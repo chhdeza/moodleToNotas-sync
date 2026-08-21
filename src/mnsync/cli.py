@@ -24,6 +24,7 @@ from .errors import MnsyncError
 from .moodle_export import MoodleSession
 from .report import write_report
 from .sync import fetch_groups, sync_course
+from .uploader import reja_verificada
 
 ANCHO = 70
 
@@ -584,7 +585,7 @@ def cmd_rehearse(args: argparse.Namespace) -> int:
     print()
 
     # La reja se verifica a sí misma antes de tocar nada.
-    if not _fence_funciona(diario.parent):
+    if not reja_verificada(diario.parent):
         print(" ✗ No se pudo confirmar que la reja de escritura quedó instalada.")
         print()
         print("   El ensayo NO continúa. Una reja que no puede demostrar que")
@@ -639,37 +640,6 @@ def cmd_rehearse(args: argparse.Namespace) -> int:
         ]
     )
     return 0
-
-
-def _fence_funciona(tmp_dir: Path) -> bool:
-    """
-    Comprueba en un subproceso que la reja se instala y deja su marca.
-
-    Se ejercita el mecanismo de verdad —no se confía en que "debería andar"—
-    porque de esta comprobación depende que el ensayo no escriba.
-    """
-    import subprocess
-
-    codigo = (
-        "import os,sys;"
-        "sys.path.insert(0, r'" + str(Path(__file__).resolve().parents[1]) + "');"
-        "from mnsync._uploader_shim import install_write_fence, FENCE_SENTINEL_ENV;"
-        "from pathlib import Path;"
-        "install_write_fence(Path(r'" + str(tmp_dir / '.fence_check.jsonl') + "'));"
-        "import requests;"
-        "s=requests.Session();"
-        "r=s.post('http://127.0.0.1:9/x/actualizarNotas', data='{}');"
-        "print('SENTINEL=' + os.environ.get(FENCE_SENTINEL_ENV,''));"
-        "print('BLOCKED=' + str(r.status_code == 200))"
-    )
-    try:
-        p = subprocess.run(
-            [sys.executable, "-c", codigo], capture_output=True, text=True, timeout=60, check=False
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return False
-    salida = p.stdout or ""
-    return "SENTINEL=1" in salida and "BLOCKED=True" in salida
 
 
 def _contar_lineas(path: Path) -> int:

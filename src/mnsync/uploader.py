@@ -24,7 +24,8 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -36,6 +37,12 @@ ACCIONES_DE_ESCRITURA = frozenset({"upload", "mark_not_presented", "would_overwr
 
 #: La acción con la que el script marca a quien no está en el roster consultado.
 ACCION_SIN_ROSTER = "skip_not_in_roster"
+
+#: La acción de una nota que **ya estaba puesta** y quedaría distinta.
+#:
+#: Es la única que exige permiso explícito, y en la aplicación de escritorio ese
+#: permiso se da fila por fila (specs/003, A-11).
+ACCION_SOBRESCRIBIRIA = "would_overwrite"
 
 #: Hasta qué número de grupo se sondea al descubrir destinos (specs/001, D-09).
 MAX_GRUPO_SONDEO = 5
@@ -206,6 +213,42 @@ class Uploader:
         resultados = plan_path.with_name(plan_path.stem + "_resultados.csv")
         return (resultados if resultados.exists() else None), res
 
+    # --- comprobaciones ---------------------------------------------------
+    def probar_ingreso(self) -> RunResult:
+        """
+        Comprueba que Notas Parciales acepta las credenciales. Solo lectura.
+
+        Usa el ``probe`` del script, que entra por NTLM y pide los instrumentos
+        del modelo. Es la comprobación más barata que existe contra el servidor
+        real, y la única que no necesita haber bajado nada de Moodle todavía:
+        por eso sirve para avisar de una contraseña vencida al arrancar, y no a
+        mitad de una sincronización (specs/003, A-14).
+        """
+        res = self._run(["probe", *self._context_args()])
+        if not res.ok:
+            raise UploaderError(
+                "Notas Parciales no aceptó tus datos.",
+                remedio=_pista_de_error(res.salida()),
+            )
+        return res
+
+    @contextmanager
+    def reja_de_escritura(self, diario: Path) -> Iterator[None]:
+        """
+        Tapia la escritura mientras dure el bloque, anotando lo interceptado.
+
+        Existe para poder ensayar **sobre planes ya calculados**: sin esto, un
+        ensayo obligaría a volver a bajar todo de Moodle y a sondear de nuevo el
+        servidor solo para cambiar una variable de entorno, y un ensayo que
+        cuesta cinco minutos es un ensayo que nadie hace.
+        """
+        anterior = self.fence_journal
+        self.fence_journal = diario
+        try:
+            yield
+        finally:
+            self.fence_journal = anterior
+
     # --- descubrimiento ---------------------------------------------------
     def discover_destinations(
         self,
@@ -340,10 +383,80 @@ def _recortar_al_destino(plan_path: Path, destination: Destination) -> None:
         escritor.writerows(propias)
 
 
+def escribir_plan_autorizado(
+    plan_path: Path, autorizadas: set[tuple[str, str]], salida: Path
+) -> Path:
+    """
+    Copia el plan dejando fuera las sobrescrituras que nadie autorizó (specs/003, A-11).
+
+    El permiso para cambiar una nota ya puesta es una sola bandera del script, y
+    vale para el plan entero. Autorizar fila por fila se consigue entonces del
+    otro lado: se le entrega un plan que **solo contiene** las sobrescrituras
+    autorizadas, y la bandera global pasa a ser exacta.
+
+    Preferimos esto a inventarle una bandera nueva al script: el archivo que se
+    ejecuta es el mismo que se puede abrir en Excel y comparar con lo que se vio
+    en pantalla, y queda como respaldo de qué se autorizó (specs/002, R-13).
+
+    Las filas que no escriben nada se conservan, para que el plan siga siendo el
+    relato completo de la corrida y no solo su parte ejecutable.
+    """
+    filas = leer_plan(plan_path)
+    conservadas = [
+        f
+        for f in filas
+        if f.get("accion") != ACCION_SOBRESCRIBIRIA
+        or (f.get("cedula", ""), f.get("instrumento", "")) in autorizadas
+    ]
+
+    with plan_path.open("r", encoding="utf-8-sig", newline="") as f:
+        campos = csv.DictReader(f).fieldnames or []
+
+    with salida.open("w", encoding="utf-8", newline="") as f:
+        escritor = csv.DictWriter(f, fieldnames=campos)
+        escritor.writeheader()
+        escritor.writerows(conservadas)
+    return salida
+
+
 def leer_plan(plan_path: Path) -> list[dict[str, str]]:
     """Lee un ``plan.csv`` como filas ya limpias."""
     with plan_path.open("r", encoding="utf-8-sig", newline="") as f:
         return [{k: (v or "").strip() for k, v in fila.items()} for fila in csv.DictReader(f)]
+
+
+def reja_verificada(tmp_dir: Path) -> bool:
+    """
+    Comprueba en un subproceso que la reja se instala y deja su marca.
+
+    Se ejercita el mecanismo de verdad —no se confía en que "debería andar"—
+    porque de esta comprobación depende que un ensayo no escriba. Una reja que
+    no puede demostrar que está puesta no protege nada.
+    """
+    codigo = (
+        "import os,sys;"
+        "sys.path.insert(0, r'" + str(Path(__file__).resolve().parents[1]) + "');"
+        "from mnsync._uploader_shim import install_write_fence, FENCE_SENTINEL_ENV;"
+        "from pathlib import Path;"
+        "install_write_fence(Path(r'" + str(tmp_dir / ".fence_check.jsonl") + "'));"
+        "import requests;"
+        "s=requests.Session();"
+        "r=s.post('http://127.0.0.1:9/x/actualizarNotas', data='{}');"
+        "print('SENTINEL=' + os.environ.get(FENCE_SENTINEL_ENV,''));"
+        "print('BLOCKED=' + str(r.status_code == 200))"
+    )
+    try:
+        p = subprocess.run(
+            [sys.executable, "-c", codigo],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    salida = p.stdout or ""
+    return "SENTINEL=1" in salida and "BLOCKED=True" in salida
 
 
 def cu_de_institucion(valor: str) -> str:

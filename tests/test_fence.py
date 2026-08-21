@@ -101,13 +101,15 @@ def test_la_reja_deja_su_marca(fence):
 
 def test_la_verificacion_de_la_reja_corre_de_verdad(tmp_path):
     """
-    ``_fence_funciona`` no confía en que "debería andar": lo ejecuta.
+    ``reja_verificada`` no confía en que "debería andar": lo ejecuta.
 
     Levanta un subproceso, instala la reja ahí e intenta una escritura real.
+    Vive en ``uploader`` y no en la línea de comandos porque la ventana ensaya
+    con la misma reja, y una segunda copia sería una que se puede quedar atrás.
     """
-    from mnsync.cli import _fence_funciona
+    from mnsync.uploader import reja_verificada
 
-    assert _fence_funciona(tmp_path) is True
+    assert reja_verificada(tmp_path) is True
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +194,7 @@ def test_un_ensayo_sin_nada_pendiente_no_manda_a_buscar_un_archivo(tmp_path, cap
         def to_console(self):
             return "  (nada)"
 
-    monkeypatch.setattr(cli, "_fence_funciona", lambda _: True)
+    monkeypatch.setattr(cli, "reja_verificada", lambda _: True)
     monkeypatch.setattr(cli, "sync_course", lambda *a, **k: ReporteVacio())
     monkeypatch.setattr(cli, "_cargar", lambda args: (_CfgFalsa(), object()))
 
