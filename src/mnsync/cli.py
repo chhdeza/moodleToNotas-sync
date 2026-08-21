@@ -607,6 +607,26 @@ def cmd_rehearse(args: argparse.Namespace) -> int:
     print()
     interceptadas = _contar_lineas(diario)
     print(f" Escrituras interceptadas: {interceptadas}")
+
+    if not interceptadas:
+        # Sin escrituras no hay diario que leer, y mandar al profesor a buscar
+        # un archivo que no existe convierte un buen resultado en un susto.
+        print()
+        print(" No había nada pendiente: todas las notas ya estaban puestas en el")
+        print(" sistema. El ensayo recorrió el camino completo de escritura y no")
+        print(" encontró nada que escribir, que es exactamente lo que uno quiere")
+        print(" ver cuando ya sincronizó.")
+        print("=" * ANCHO)
+        siguiente_paso(
+            [
+                "No hace falta hacer nada más. Cuando pongás notas nuevas en",
+                "Moodle, volvé a empezar por:",
+                "",
+                f"   mnsync plan --course {course.id}",
+            ]
+        )
+        return 0
+
     print(f" Detalle: {diario}")
     print("=" * ANCHO)
 
