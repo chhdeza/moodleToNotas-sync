@@ -90,7 +90,11 @@ def fetch_groups(
     exports: list[GroupExport] = []
     for g in objetivo:
         export = session.export_group(course.moodle_course_id, g.moodle_group_id)
-        xlsx = write_moodle_xlsx(export, work_dir / f"calificaciones_{course.id}_{g.slug}.xlsx")
+        xlsx = write_moodle_xlsx(
+            export,
+            work_dir / f"calificaciones_{course.id}_{g.slug}.xlsx",
+            conservar=set(course.item_map),
+        )
         exports.append(GroupExport(group=g, export=export, xlsx=xlsx))
 
     _assert_groups_are_distinct(exports)
@@ -134,7 +138,13 @@ def _cus_presentes(exports: list[GroupExport]) -> list[str]:
     return sorted(vistos)
 
 
-def split_por_cu(exports: list[GroupExport], work_dir: Path, course_id: str) -> dict[str, Path]:
+def split_por_cu(
+    exports: list[GroupExport],
+    work_dir: Path,
+    course_id: str,
+    *,
+    conservar: set[str] | None = None,
+) -> dict[str, Path]:
     """
     Junta los grupos de Moodle y reparte a los estudiantes por centro universitario.
 
@@ -180,7 +190,9 @@ def split_por_cu(exports: list[GroupExport], work_dir: Path, course_id: str) -> 
             grade_headers=list(grade_headers),
         )
         salidas[cu] = write_moodle_xlsx(
-            export, work_dir / f"calificaciones_{course_id}_cu{cu}.xlsx"
+            export,
+            work_dir / f"calificaciones_{course_id}_cu{cu}.xlsx",
+            conservar=conservar,
         )
     return salidas
 
@@ -233,7 +245,7 @@ def sync_course(
     # --- Fase A: recolectar y agrupar ---------------------------------------
     exports = fetch_groups(course, creds, work_dir, groups=groups, session=session)
     report.grupos_moodle = tuple(ge.group for ge in exports)
-    xlsx_por_cu = split_por_cu(exports, work_dir, course.id)
+    xlsx_por_cu = split_por_cu(exports, work_dir, course.id, conservar=set(course.item_map))
 
     uploader = Uploader(course, creds, work_dir, fence_journal=fence_journal)
 

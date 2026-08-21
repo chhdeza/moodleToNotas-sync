@@ -168,7 +168,7 @@ def verificar_contexto(
             ),
         )
 
-    xlsx_por_cu = split_por_cu(exports, work_dir, course.id)
+    xlsx_por_cu = split_por_cu(exports, work_dir, course.id, conservar=set(course.item_map))
     cus = tuple(sorted(xlsx_por_cu))
 
     uploader = Uploader(course, creds, work_dir)

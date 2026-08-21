@@ -51,6 +51,24 @@ COLUMNAS_NO_NOTA = frozenset(
     }
 )
 
+#: Columnas que Moodle **calcula** y agrega solas: el total del curso y los
+#: totales de categoría.
+#:
+#: No son instrumentos de evaluación y no tienen dónde subirse: Notas Parciales
+#: saca su propio promedio a partir de las notas que uno carga. Si se dejaran
+#: pasar, cada corrida terminaría con una advertencia por estudiante diciendo
+#: que esa columna no se pudo emparejar — y una advertencia que sale siempre y
+#: nunca significa nada enseña a no leer las advertencias.
+_RE_COLUMNA_CALCULADA = re.compile(
+    r"^\s*total\s+(del\s+curso|de\s+(la\s+)?categor[íi]a)\b",
+    re.IGNORECASE,
+)
+
+
+def es_columna_calculada(header: str) -> bool:
+    """¿Es una de las columnas que Moodle calcula solo (totales)?"""
+    return bool(_RE_COLUMNA_CALCULADA.match(header or ""))
+
 
 #: Enlaces a un curso, tal como los escribe Moodle con cualquier tema visual.
 _RE_ENLACE_CURSO = re.compile(
@@ -437,7 +455,9 @@ def is_grade_column(header: str) -> bool:
     plan vacío sin explicar por qué.
     """
     h = header.strip()
-    return bool(h) and h not in COLUMNAS_IDENTIDAD and h not in COLUMNAS_NO_NOTA
+    if not h or h in COLUMNAS_IDENTIDAD or h in COLUMNAS_NO_NOTA:
+        return False
+    return not es_columna_calculada(h)
 
 
 def _assert_identity_columns(headers: list[str]) -> None:
@@ -456,12 +476,24 @@ def _assert_identity_columns(headers: list[str]) -> None:
     )
 
 
-def write_moodle_xlsx(export: GradeExport, path: Path) -> Path:
+def write_moodle_xlsx(
+    export: GradeExport, path: Path, *, conservar: set[str] | None = None
+) -> Path:
     """
     Escribe el .xlsx con la forma exacta que espera ``notasparciales_upload.py``.
 
     Ese script busca los encabezados «Nombre», «Apellido(s)», «Número de ID» e
     «Institución» tal cual, así que se preservan sin tocar.
+
+    Se escriben **solo** esas cuatro y las columnas de nota. Todo lo demás se
+    queda afuera, por dos razones: las columnas que Moodle calcula solo no
+    tienen dónde subirse y solo generan advertencias vacías, y el correo
+    electrónico de un estudiante no tiene por qué quedar en un archivo en el
+    disco de nadie.
+
+    ``conservar`` agrega columnas que igual hay que escribir: son las que el
+    profesor nombró a mano en ``item_map``, y si él dice que esa columna va a un
+    instrumento, va.
     """
     try:
         import openpyxl
@@ -475,8 +507,13 @@ def write_moodle_xlsx(export: GradeExport, path: Path) -> Path:
     ws = wb.active
     ws.title = "Calificaciones"
 
+    pedidas = conservar or set()
     columnas = [c for c in COLUMNAS_IDENTIDAD if c in export.headers]
-    columnas += [h for h in export.headers if h not in columnas]
+    columnas += [
+        h
+        for h in export.headers
+        if h not in columnas and (h in export.grade_headers or h in pedidas)
+    ]
 
     ws.append(columnas)
     for row in export.rows:
