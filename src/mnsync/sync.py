@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import Course, Credentials, Destination, MoodleGroupRef
-from .errors import MnsyncError, ScopeError
+from .errors import ConfigError, MnsyncError, ScopeError
 from .guard import (
     GuardVerdict,
     Routing,
@@ -74,6 +74,14 @@ def fetch_groups(
     Una sola sesión de Moodle para todos los grupos.
     """
     objetivo = list(groups if groups is not None else course.groups)
+    if not objetivo:
+        raise ConfigError(
+            f"El curso «{course.id}» todavía no tiene ningún grupo de Moodle configurado.",
+            remedio=(
+                "Averiguá cuáles son los tuyos y copiálos a courses.yml, bajo "
+                f"«moodle: groups:». Ejecutá:  mnsync groups --course {course.id}"
+            ),
+        )
 
     if session is None:
         session = MoodleSession(creds.moodle_url)

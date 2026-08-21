@@ -415,14 +415,16 @@ def _parse_course(raw: Any, index: int) -> Course:
     )
 
     # Los grupos del tutor viven bajo «moodle:», que es donde pertenecen.
-    groups_raw = moodle.get("groups")
-    if not isinstance(groups_raw, list) or not groups_raw:
+    #
+    # Se admite que la lista esté vacía, y a propósito: el comando que sirve
+    # para averiguar los números de grupo necesita poder leer el archivo antes
+    # de que estén escritos. Los comandos que sí los necesitan se quejan al
+    # usarlos, no acá.
+    groups_raw = moodle.get("groups") or []
+    if not isinstance(groups_raw, list):
         raise ConfigError(
-            f"{where} no tiene ningún grupo de Moodle configurado.",
-            remedio=(
-                "Agregá al menos un grupo en «moodle.groups». Para ver los grupos "
-                f"disponibles ejecutá:  mnsync groups --course {course_id}"
-            ),
+            f"«moodle.groups» en {where} debería ser una lista de grupos.",
+            remedio="Mirá «courses.example.yml»: ahí está explicado campo por campo.",
         )
     groups = tuple(
         _parse_moodle_group(g, course_id=course_id, index=i) for i, g in enumerate(groups_raw)

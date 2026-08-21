@@ -391,6 +391,22 @@ def test_ca05_contexto_equivocado_no_escribe_nada(fake_np, tmp_path):
 # ---------------------------------------------------------------------------
 # CA-07 — la configuración no lleva datos personales
 # ---------------------------------------------------------------------------
+def test_sincronizar_sin_grupos_dice_que_correr(fake_np, tmp_path, capsys):
+    """
+    Con el archivo recién creado, el error tiene que llevar al paso siguiente.
+
+    Es el primer tropiezo posible de un profesor, y un error que solo dijera
+    «no hay grupos» lo dejaría igual de perdido que antes.
+    """
+    cfg = escribir_courses_yml(tmp_path, grupos_moodle=[])
+
+    assert correr(tmp_path, cfg, "destinos", "--course", "curso-prueba") == 1
+
+    salida = capsys.readouterr().out
+    assert "no tiene ningún grupo de Moodle configurado" in salida
+    assert "mnsync groups --course curso-prueba" in salida
+
+
 def test_ca07_la_configuracion_no_contiene_cedulas(tmp_path):
     """
     La configuración la consume también el flujo automático, y vive en un

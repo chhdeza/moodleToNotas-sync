@@ -149,10 +149,16 @@ def test_rechaza_el_mismo_grupo_de_moodle_repetido(tmp_path):
     assert "dos veces" in str(ex.value)
 
 
-def test_rechaza_curso_sin_grupos(tmp_path):
-    with pytest.raises(ConfigError) as ex:
-        load_config(escribir(tmp_path, "        []\n"))
-    assert "mnsync groups" in str(ex.value)
+def test_acepta_un_curso_sin_grupos_todavia(tmp_path):
+    """
+    Es el estado del archivo recién creado, antes de saber los números.
+
+    «mnsync groups» necesita poder leer el archivo para decir cuáles son los
+    grupos: exigirlos acá dejaría al profesor sin forma de averiguarlos. Los
+    comandos que sí los necesitan se quejan al usarlos, y explican qué correr.
+    """
+    curso = load_config(escribir(tmp_path, "        []\n")).course("curso-a")
+    assert curso.groups == ()
 
 
 def test_rechaza_max_changes_negativo(tmp_path):
