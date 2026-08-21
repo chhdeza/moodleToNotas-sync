@@ -21,6 +21,8 @@ courses:
   - id: curso-a
     moodle:
       course_id: 8067
+      groups:
+{grupos}
     notas_parciales:
       ano: "2026"
       pac: "3"
@@ -30,20 +32,26 @@ courses:
       encargado: ARODRIGUEZP
       tutor: "0401780367"
       modelo: 4
-    groups:
-{grupos}
+{destinos}
     policy:
       allow_update: false
       max_changes: 40
 """
 
-G1 = '      - moodle_group_id: 38525\n        cu: "42"\n        grupo: 1\n'
-G2 = '      - moodle_group_id: 38526\n        cu: "01"\n        grupo: 2\n'
+G1 = '        - id: 38525\n          name: "Grupo 1"\n'
+G2 = '        - id: 38526\n          name: "Grupo 2"\n'
+
+DESTINOS = (
+    '    destinos:\n'
+    '      - cu: "42"\n        grupo: 1\n'
+    '      - cu: "42"\n        grupo: 2\n'
+    '      - cu: "01"\n        grupo: 1\n'
+)
 
 
-def escribir(tmp_path: Path, grupos: str, base: str = BASE_YAML) -> Path:
+def escribir(tmp_path: Path, grupos: str, destinos: str = "", base: str = BASE_YAML) -> Path:
     p = tmp_path / "courses.yml"
-    p.write_text(base.format(grupos=grupos), encoding="utf-8")
+    p.write_text(base.format(grupos=grupos, destinos=destinos), encoding="utf-8")
     return p
 
 
@@ -51,10 +59,34 @@ def escribir(tmp_path: Path, grupos: str, base: str = BASE_YAML) -> Path:
 # Lo que debe aceptar
 # ---------------------------------------------------------------------------
 def test_carga_curso_con_dos_grupos(tmp_path):
-    cfg = load_config(escribir(tmp_path, G1 + G2))
+    cfg = load_config(escribir(tmp_path, G1 + G2, DESTINOS))
     curso = cfg.course("curso-a")
     assert [g.moodle_group_id for g in curso.groups] == [38525, 38526]
-    assert curso.groups[0].cu == "42"
+    assert curso.groups[0].name == "Grupo 1"
+
+
+def test_un_cu_puede_tener_varios_destinos(tmp_path):
+    """
+    Es el caso normal, no una anomalía (specs/001, D-04).
+
+    El esquema anterior no podía ni expresarlo: cada grupo llevaba un solo
+    «cu» y un solo «grupo», y los estudiantes del segundo se perdían.
+    """
+    curso = load_config(escribir(tmp_path, G1, DESTINOS)).course("curso-a")
+    cu42 = [d for d in curso.destinations if d.cu == "42"]
+    assert [d.grupo for d in cu42] == [1, 2]
+
+
+def test_los_destinos_son_opcionales(tmp_path):
+    """Sin declararlos, se descubren sondeando (specs/002, R-05)."""
+    curso = load_config(escribir(tmp_path, G1)).course("curso-a")
+    assert curso.destinations == ()
+
+
+def test_acepta_el_grupo_como_numero_suelto(tmp_path):
+    """A mano, escribir solo el número es más cómodo que un bloque."""
+    curso = load_config(escribir(tmp_path, "        - 38525\n")).course("curso-a")
+    assert curso.groups[0].moodle_group_id == 38525
 
 
 def test_preserva_los_ceros_a_la_izquierda(tmp_path):
@@ -64,56 +96,54 @@ def test_preserva_los_ceros_a_la_izquierda(tmp_path):
     Si YAML los convirtiera a número, el servidor devolvería tablas vacías sin
     dar ningún error, que es el fallo silencioso más difícil de diagnosticar.
     """
-    cfg = load_config(escribir(tmp_path, G1 + G2))
-    curso = cfg.course("curso-a")
+    curso = load_config(escribir(tmp_path, G1, DESTINOS)).course("curso-a")
     assert curso.np.asignatura == "00883"
     assert curso.np.escuela == "03"
-    assert curso.groups[1].cu == "01"
+    assert curso.destinations[2].cu == "01"
 
 
-def test_slug_del_grupo_sirve_para_nombrar_archivos(tmp_path):
-    cfg = load_config(escribir(tmp_path, G1))
-    assert cfg.course("curso-a").groups[0].slug == "g38525_cu42_gr1"
+def test_slugs_sirven_para_nombrar_archivos(tmp_path):
+    curso = load_config(escribir(tmp_path, G1, DESTINOS)).course("curso-a")
+    assert curso.groups[0].slug == "g38525"
+    assert curso.destinations[0].slug == "cu42_gr1"
 
 
 # ---------------------------------------------------------------------------
 # Lo que debe rechazar
 # ---------------------------------------------------------------------------
-def test_rechaza_grupo_sin_cu(tmp_path):
-    malo = '      - moodle_group_id: 38525\n        grupo: 1\n'
+def test_rechaza_destino_sin_cu(tmp_path):
+    malo = '    destinos:\n      - grupo: 1\n'
     with pytest.raises(ConfigError) as ex:
-        load_config(escribir(tmp_path, malo))
+        load_config(escribir(tmp_path, G1, malo))
     assert "cu" in str(ex.value)
 
 
-def test_rechaza_grupo_sin_numero_de_grupo(tmp_path):
-    malo = '      - moodle_group_id: 38525\n        cu: "42"\n'
+def test_rechaza_destino_sin_numero_de_grupo(tmp_path):
+    malo = '    destinos:\n      - cu: "42"\n'
     with pytest.raises(ConfigError) as ex:
-        load_config(escribir(tmp_path, malo))
+        load_config(escribir(tmp_path, G1, malo))
     assert "grupo" in str(ex.value)
 
 
-def test_rechaza_dos_grupos_apuntando_al_mismo_destino(tmp_path):
+def test_rechaza_el_mismo_destino_repetido(tmp_path):
     """
-    Dos grupos de Moodle no pueden ir al mismo (cu, grupo) oficial.
+    Escribir dos veces sobre el mismo grupo oficial duplicaría el trabajo.
 
-    Si se permitiera, el segundo pisaría las notas del primero sin avisar.
+    Que el mismo CU aparezca con grupos distintos sí es correcto; lo que no
+    puede repetirse es el par completo.
     """
     choque = (
-        '      - moodle_group_id: 38525\n        cu: "42"\n        grupo: 1\n'
-        '      - moodle_group_id: 38526\n        cu: "42"\n        grupo: 1\n'
+        '    destinos:\n'
+        '      - cu: "42"\n        grupo: 1\n'
+        '      - cu: "42"\n        grupo: 1\n'
     )
     with pytest.raises(ConfigError) as ex:
-        load_config(escribir(tmp_path, choque))
-    msg = str(ex.value)
-    assert "38525" in msg and "38526" in msg
+        load_config(escribir(tmp_path, G1, choque))
+    assert "dos veces" in str(ex.value)
 
 
 def test_rechaza_el_mismo_grupo_de_moodle_repetido(tmp_path):
-    repetido = (
-        '      - moodle_group_id: 38525\n        cu: "42"\n        grupo: 1\n'
-        '      - moodle_group_id: 38525\n        cu: "01"\n        grupo: 2\n'
-    )
+    repetido = '        - id: 38525\n        - id: 38525\n'
     with pytest.raises(ConfigError) as ex:
         load_config(escribir(tmp_path, repetido))
     assert "dos veces" in str(ex.value)
@@ -121,7 +151,7 @@ def test_rechaza_el_mismo_grupo_de_moodle_repetido(tmp_path):
 
 def test_rechaza_curso_sin_grupos(tmp_path):
     with pytest.raises(ConfigError) as ex:
-        load_config(escribir(tmp_path, "      []\n"))
+        load_config(escribir(tmp_path, "        []\n"))
     assert "mnsync groups" in str(ex.value)
 
 

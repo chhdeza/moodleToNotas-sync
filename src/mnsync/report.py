@@ -1,10 +1,14 @@
 """
 Reporte de cambios, en español y para el profesor.
 
-Una sección por grupo, y dentro de cada una lo que de verdad importa: qué se
-escribió, qué no, y qué conviene mirar con calma. La sección de casos a
-revisar sigue la convención de «casos límite» que ya usa el flujo de
-calificación asistida.
+Una sección por **destino** de Notas Parciales —que es donde aterriza una
+escritura— y dentro de cada una lo que de verdad importa: qué se escribió, qué
+no, y qué conviene mirar con calma.
+
+Antes de todo eso va el reparto: a cuántos destinos fueron a parar los
+estudiantes y, sobre todo, **quién se quedó sin ninguno**. Eso último es poco
+frecuente (specs/001, D-07) y por eso mismo va nombrado y arriba, no sepultado
+entre filas de detalle.
 """
 
 from __future__ import annotations
@@ -14,8 +18,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from .config import Course
-from .guard import GuardVerdict, PlanSummary
+from .config import Course, Destination, MoodleGroupRef
+from .guard import GuardVerdict, PlanSummary, Routing, RoutingVerdict
 
 #: Cómo se llama cada acción en castellano llano, y qué debe hacer el profesor.
 ACCIONES = {
@@ -23,18 +27,23 @@ ACCIONES = {
     "mark_not_presented": ("Marcada como «no presentó»", "Confirmá que de verdad no entregó"),
     "skip_already_set": ("Ya estaba igual", "Nada. Ver muchas de estas es buena señal"),
     "would_overwrite": ("Cambiaría una nota existente", "🛑 Revisar"),
-    "skip_not_in_roster": ("No está en el grupo oficial", "🛑 Revisar cédula o grupo"),
+    "skip_not_in_roster": ("De otro grupo oficial", "Nada: lo recoge el plan de su grupo"),
     "skip_retirado": ("Estudiante retirado", "Nada"),
     "review": ("Caso raro, no se tocó", "🛑 Revisar"),
 }
 
 #: Acciones que el profesor debería mirar sí o sí.
-REQUIEREN_ATENCION = ("would_overwrite", "skip_not_in_roster", "review")
+#:
+#: ``skip_not_in_roster`` NO está acá: con el abanico de destinos, casi todas
+#: esas filas son estudiantes de otro destino, y marcarlas como problema
+#: ahogaría el reporte. Los que de verdad no aparecen en ningún lado se
+#: reportan aparte, con nombre y apellido (specs/002, R-07).
+REQUIEREN_ATENCION = ("would_overwrite", "review")
 
 
 @dataclass
-class GroupOutcome:
-    """Todo lo que pasó con un grupo en una corrida."""
+class DestinationOutcome:
+    """Todo lo que pasó con un destino de Notas Parciales en una corrida."""
 
     summary: PlanSummary
     verdict: GuardVerdict
@@ -47,8 +56,12 @@ class GroupOutcome:
     error: str | None = None
 
     @property
+    def destination(self) -> Destination:
+        return self.summary.destination
+
+    @property
     def label(self) -> str:
-        return self.summary.group.label
+        return self.summary.destination.label
 
     @property
     def acciones_escritas(self) -> tuple[str, ...]:
@@ -69,8 +82,16 @@ class RunReport:
 
     course: Course
     commit: bool
-    outcomes: list[GroupOutcome] = field(default_factory=list)
+    outcomes: list[DestinationOutcome] = field(default_factory=list)
     started: datetime = field(default_factory=datetime.now)
+    #: Los grupos de Moodle de los que se recolectó.
+    grupos_moodle: tuple[MoodleGroupRef, ...] = ()
+    #: Los destinos a los que se repartió.
+    destinos: tuple[Destination, ...] = ()
+    #: Dónde quedó cada estudiante.
+    routing: Routing | None = None
+    #: El fallo del discriminador de patrón.
+    routing_verdict: RoutingVerdict | None = None
 
     @property
     def total_cambios(self) -> int:
@@ -84,6 +105,8 @@ class RunReport:
 
     @property
     def hubo_bloqueos(self) -> bool:
+        if self.routing_verdict is not None and self.routing_verdict.blocked:
+            return True
         return any(o.verdict.blocked for o in self.outcomes)
 
     @property
@@ -91,9 +114,32 @@ class RunReport:
         return any(o.error for o in self.outcomes)
 
     @property
+    def sin_destino(self) -> list[tuple[str, str, str]]:
+        """
+        Los estudiantes que no aparecieron en ningún roster oficial.
+
+        Devuelve ``(cédula, nombre, cu)``. Es poco frecuente (specs/001, D-07),
+        y justamente por eso cada uno merece que se lo nombre.
+        """
+        if self.routing is None:
+            return []
+        cu_por_cedula = {
+            cedula: cu for cu, cedulas in self.routing.por_cu.items() for cedula in cedulas
+        }
+        return sorted(
+            (cedula, self.routing.nombres.get(cedula, ""), cu_por_cedula.get(cedula, ""))
+            for cedula in self.routing.sin_destino()
+        )
+
+    @property
     def necesita_atencion(self) -> bool:
-        return self.hubo_bloqueos or self.hubo_errores or any(
-            o.summary.por_accion.get(a, 0) for o in self.outcomes for a in REQUIEREN_ATENCION
+        return (
+            self.hubo_bloqueos
+            or self.hubo_errores
+            or bool(self.sin_destino)
+            or any(
+                o.summary.por_accion.get(a, 0) for o in self.outcomes for a in REQUIEREN_ATENCION
+            )
         )
 
     # --- salida ---------------------------------------------------------
@@ -104,12 +150,17 @@ class RunReport:
         L.append("")
         L.append(f"**Fecha:** {self.started:%d/%m/%Y %H:%M}  ")
         L.append(f"**Modo:** {modo}  ")
-        L.append(f"**Grupos procesados:** {len(self.outcomes)}")
+        if self.grupos_moodle:
+            nombres = ", ".join(g.label for g in self.grupos_moodle)
+            L.append(f"**Grupos de Moodle:** {nombres}  ")
+        L.append(f"**Destinos en Notas Parciales:** {len(self.outcomes)}")
         L.append("")
+
+        L.extend(self._routing_section())
 
         L.append("## Resumen")
         L.append("")
-        L.append("| Grupo | En el plan | Cambios | Ya estaban | A revisar | Resultado |")
+        L.append("| Destino | Suyos | Cambios | Ya estaban | A revisar | Resultado |")
         L.append("|---|---:|---:|---:|---:|---|")
         for o in self.outcomes:
             if o.error:
@@ -122,13 +173,13 @@ class RunReport:
                 estado = "🧪 prueba"
             atencion = sum(o.summary.por_accion.get(a, 0) for a in REQUIEREN_ATENCION)
             L.append(
-                f"| {o.label} | {o.summary.total} | {o.summary.cambios} | "
+                f"| {o.label} | {o.summary.propias} | {o.summary.cambios} | "
                 f"{o.summary.ya_estaban} | {atencion} | {estado} |"
             )
         L.append("")
 
         for o in self.outcomes:
-            L.extend(self._group_section(o))
+            L.extend(self._destination_section(o))
 
         L.append("---")
         L.append("")
@@ -150,12 +201,47 @@ class RunReport:
         L.append("")
         return "\n".join(L)
 
-    def _group_section(self, o: GroupOutcome) -> list[str]:
-        g = o.summary.group
-        L = [f"## Grupo: {o.label}", ""]
-        L.append(
-            f"Moodle grupo `{g.moodle_group_id}` → Notas Parciales CU `{g.cu}`, grupo `{g.grupo}`"
-        )
+    def _routing_section(self) -> list[str]:
+        """El reparto, y quién se quedó fuera. Va antes que nada."""
+        L: list[str] = []
+        v = self.routing_verdict
+
+        if v is not None and v.blocked:
+            L += [
+                "> 🛑 **Un freno detuvo la corrida.**",
+                f"> {v.reason}",
+                ">",
+                f"> **¿Qué hacer?** {v.remedy}",
+                "",
+            ]
+
+        huerfanos = self.sin_destino
+        if huerfanos:
+            L.append("## Estudiantes sin grupo oficial")
+            L.append("")
+            L.append(
+                f"Estos **{len(huerfanos)}** estudiante(s) están en Moodle pero no "
+                "aparecen en ningún grupo de Notas Parciales, así que **sus notas no "
+                "se subieron**. El resto sí se procesó con normalidad."
+            )
+            L.append("")
+            L.append("| Cédula | Nombre | CU |")
+            L.append("|---|---|---|")
+            for cedula, nombre, cu in huerfanos:
+                L.append(f"| {cedula} | {nombre or '—'} | {cu or '—'} |")
+            L.append("")
+            L.append(
+                "> Suele significar que la persona no quedó matriculada en esta "
+                "asignatura. Consultalo con registro antes del cierre de actas."
+            )
+            L.append("")
+
+        return L
+
+    def _destination_section(self, o: DestinationOutcome) -> list[str]:
+        d = o.summary.destination
+        L = [f"## Destino: {o.label}", ""]
+        L.append(f"Notas Parciales · centro universitario `{d.cu}`, grupo `{d.grupo}`")
         L.append("")
 
         if o.error:
@@ -164,7 +250,7 @@ class RunReport:
 
         if o.verdict.blocked:
             L += [
-                "> 🛑 **No se escribió nada en este grupo.**",
+                "> 🛑 **No se escribió nada en este destino.**",
                 f"> {o.verdict.reason}",
                 ">",
                 f"> **¿Qué hacer?** {o.verdict.remedy}",
@@ -211,18 +297,18 @@ class RunReport:
 
         return L
 
-    def _leer_plan(self, o: GroupOutcome) -> list[dict[str, str]]:
+    def _leer_plan(self, o: DestinationOutcome) -> list[dict[str, str]]:
         if not o.summary.plan_path.exists():
             return []
         with o.summary.plan_path.open("r", encoding="utf-8-sig", newline="") as f:
             return [{k: (v or "").strip() for k, v in r.items()} for r in csv.DictReader(f)]
 
-    def _filas_escritas(self, o: GroupOutcome) -> list[dict[str, str]]:
+    def _filas_escritas(self, o: DestinationOutcome) -> list[dict[str, str]]:
         if not o.escrito:
             return []
         return [r for r in self._leer_plan(o) if r.get("accion") in o.acciones_escritas]
 
-    def _filas_de_atencion(self, o: GroupOutcome) -> list[dict[str, str]]:
+    def _filas_de_atencion(self, o: DestinationOutcome) -> list[dict[str, str]]:
         return [r for r in self._leer_plan(o) if r.get("accion") in REQUIEREN_ATENCION]
 
     # --- resumen corto para la terminal ---------------------------------

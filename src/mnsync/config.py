@@ -121,28 +121,55 @@ def missing_credentials(creds: Credentials) -> list[str]:
 # courses.yml
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
-class Group:
+class MoodleGroupRef:
     """
-    Un grupo que da el profesor.
+    Un grupo de Moodle que imparte el profesor.
 
-    Es la unidad de sincronización: cada grupo se exporta, se planifica y se
-    sube por separado, para que el alcance de cada escritura sea demostrable.
+    Es un **ámbito de recolección**, no un destino: dice *de quién* son los
+    estudiantes que hay que bajar. Una vez recolectados, el grupo del que
+    vinieron no influye en dónde se escriben sus notas (specs/001, D-11).
     """
 
     moodle_group_id: int
-    cu: str
-    grupo: int
     name: str = ""
 
     @property
     def label(self) -> str:
         """Etiqueta legible para reportes."""
-        return self.name or f"CU {self.cu} / grupo {self.grupo}"
+        return self.name or f"grupo de Moodle {self.moodle_group_id}"
 
     @property
     def slug(self) -> str:
         """Fragmento seguro para nombres de archivo."""
-        return f"g{self.moodle_group_id}_cu{self.cu}_gr{self.grupo}"
+        return f"g{self.moodle_group_id}"
+
+
+@dataclass(frozen=True)
+class Destination:
+    """
+    Un destino en Notas Parciales: el par ``(cu, grupo)``.
+
+    Es la **unidad de escritura**. Un centro universitario puede tener varios
+    (specs/001, D-04), así que un CU por sí solo no identifica un destino.
+
+    No lleva cédulas ni ningún dato personal: qué estudiante va a qué destino se
+    resuelve contra el servidor en cada corrida y no se persiste (specs/002, R-15).
+    """
+
+    cu: str
+    grupo: int
+
+    @property
+    def label(self) -> str:
+        return f"CU {self.cu} / grupo {self.grupo}"
+
+    @property
+    def slug(self) -> str:
+        return f"cu{self.cu}_gr{self.grupo}"
+
+    @property
+    def key(self) -> tuple[str, int]:
+        return (self.cu, self.grupo)
 
 
 @dataclass(frozen=True)
@@ -175,16 +202,25 @@ class NotasParcialesCtx:
 
 @dataclass(frozen=True)
 class Course:
-    """Un curso de Moodle y los grupos de él que da el profesor."""
+    """
+    Un curso de Moodle, los grupos que de él imparte el profesor, y los destinos
+    de Notas Parciales a los que van a parar sus estudiantes.
+
+    Las dos listas son independientes y de tamaños distintos: un grupo de Moodle
+    alimenta varios destinos, y un destino se alimenta de varios grupos
+    (specs/001, D-02 y D-11).
+    """
 
     id: str
     moodle_course_id: int
     np: NotasParcialesCtx
-    groups: tuple[Group, ...]
+    groups: tuple[MoodleGroupRef, ...]
+    #: Vacío significa «descubrirlos sondeando» (specs/002, R-05).
+    destinations: tuple[Destination, ...] = ()
     item_map: dict[str, str] = field(default_factory=dict)
     policy: Policy = field(default_factory=Policy)
 
-    def group_by_moodle_id(self, moodle_group_id: int) -> Group:
+    def group_by_moodle_id(self, moodle_group_id: int) -> MoodleGroupRef:
         for g in self.groups:
             if g.moodle_group_id == moodle_group_id:
                 return g
@@ -245,56 +281,92 @@ def _as_str(value: Any) -> str:
     return str(value).strip()
 
 
-def _parse_group(raw: Any, *, course_id: str, index: int) -> Group:
+def _parse_moodle_group(raw: Any, *, course_id: str, index: int) -> MoodleGroupRef:
+    """
+    Lee una entrada de ``moodle.groups``.
+
+    Se acepta tanto el número suelto como el bloque con «id» y «name»: el
+    asistente escribe la forma larga, pero a mano la corta es más cómoda.
+    """
     where = f"el grupo #{index + 1} del curso «{course_id}»"
+
+    if isinstance(raw, (int, str)) and not isinstance(raw, bool):
+        return MoodleGroupRef(moodle_group_id=_as_int(raw, "id", where))
+
     if not isinstance(raw, dict):
-        raise ConfigError(f"{where} debería ser una lista de campos, no «{raw!r}».")
+        raise ConfigError(f"{where} debería ser un número o un bloque con «id», no «{raw!r}».")
 
-    moodle_group_id = _as_int(_req(raw, "moodle_group_id", where), "moodle_group_id", where)
-    cu = _as_str(_req(raw, "cu", where))
-    grupo = _as_int(_req(raw, "grupo", where), "grupo", where)
+    # El esquema anterior ponía «cu» y «grupo» dentro de cada grupo de Moodle.
+    # Ignorarlos en silencio sería el peor de los caminos: el archivo diría una
+    # cosa y el programa haría otra. Mejor detenerse y explicar el cambio.
+    if "cu" in raw or "grupo" in raw:
+        raise ConfigError(
+            f"{where} todavía tiene «cu» y «grupo» adentro, del formato anterior.",
+            remedio=(
+                "Un grupo de Moodle reúne estudiantes de varios centros universitarios, "
+                "así que ya no se le asigna uno solo. Quitá «cu» y «grupo» de cada grupo "
+                "y dejá únicamente «id» y «name». Si querés declarar los grupos de Notas "
+                "Parciales, van aparte, en una sección «destinos» del curso. Mirá "
+                "«courses.example.yml»."
+            ),
+        )
 
-    return Group(
-        moodle_group_id=moodle_group_id,
-        cu=cu,
-        grupo=grupo,
+    # «moodle_group_id» era el nombre del esquema anterior; se sigue aceptando
+    # para no romper un archivo escrito a mano antes del cambio.
+    bruto = raw.get("id", raw.get("moodle_group_id"))
+    if bruto is None or bruto == "":
+        raise ConfigError(
+            f"Falta «id» en {where}.",
+            remedio="Mirá «courses.example.yml»: ahí está explicado campo por campo.",
+        )
+
+    return MoodleGroupRef(
+        moodle_group_id=_as_int(bruto, "id", where),
         name=_as_str(raw.get("name") or ""),
     )
 
 
-def _validate_groups(groups: tuple[Group, ...], *, course_id: str) -> None:
-    """
-    Rechaza las dos formas de configurar grupos que fallan en silencio.
+def _parse_destination(raw: Any, *, course_id: str, index: int) -> Destination:
+    where = f"el destino #{index + 1} del curso «{course_id}»"
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{where} debería ser un bloque con «cu» y «grupo», no «{raw!r}».")
+    return Destination(
+        cu=_as_str(_req(raw, "cu", where)),
+        grupo=_as_int(_req(raw, "grupo", where), "grupo", where),
+    )
 
-    1. Dos grupos de Moodle apuntando al mismo (cu, grupo) de Notas Parciales:
-       el segundo sobrescribiría al primero sin avisar.
-    2. El mismo grupo de Moodle repetido: se subiría dos veces.
-    """
-    vistos_np: dict[tuple[str, int], Group] = {}
-    vistos_moodle: dict[int, Group] = {}
 
+def _validate_moodle_groups(groups: tuple[MoodleGroupRef, ...], *, course_id: str) -> None:
+    """Un grupo de Moodle repetido descargaría dos veces a los mismos estudiantes."""
+    vistos: set[int] = set()
     for g in groups:
-        clave_np = (g.cu, g.grupo)
-        if clave_np in vistos_np:
-            otro = vistos_np[clave_np]
-            raise ConfigError(
-                f"En el curso «{course_id}», los grupos de Moodle {otro.moodle_group_id} y "
-                f"{g.moodle_group_id} apuntan los dos al CU {g.cu} / grupo {g.grupo} "
-                "de Notas Parciales.",
-                remedio=(
-                    "Cada grupo de Moodle tiene que ir a un grupo distinto del sistema "
-                    "oficial. Revisá los valores de «cu» y «grupo» de ese curso."
-                ),
-            )
-        vistos_np[clave_np] = g
-
-        if g.moodle_group_id in vistos_moodle:
+        if g.moodle_group_id in vistos:
             raise ConfigError(
                 f"En el curso «{course_id}», el grupo de Moodle {g.moodle_group_id} "
                 "está configurado dos veces.",
                 remedio="Dejá una sola entrada por cada grupo de Moodle.",
             )
-        vistos_moodle[g.moodle_group_id] = g
+        vistos.add(g.moodle_group_id)
+
+
+def _validate_destinations(destinations: tuple[Destination, ...], *, course_id: str) -> None:
+    """
+    Un destino repetido significa escribir dos veces sobre el mismo grupo oficial.
+
+    Que un mismo CU aparezca con grupos distintos es normal y esperado
+    (specs/001, D-04); lo que no puede repetirse es el par completo.
+    """
+    vistos: set[tuple[str, int]] = set()
+    for d in destinations:
+        if d.key in vistos:
+            raise ConfigError(
+                f"En el curso «{course_id}», el destino {d.label} está configurado dos veces.",
+                remedio=(
+                    "Dejá una sola entrada por cada par de centro universitario y grupo. "
+                    "Que el mismo CU aparezca con grupos distintos sí es correcto."
+                ),
+            )
+        vistos.add(d.key)
 
 
 def _parse_course(raw: Any, index: int) -> Course:
@@ -327,17 +399,34 @@ def _parse_course(raw: Any, index: int) -> Course:
         tipo=_as_str(np_raw.get("tipo") or "O"),
     )
 
-    groups_raw = _req(raw, "groups", where)
+    # Los grupos del tutor viven bajo «moodle:», que es donde conceptualmente
+    # pertenecen. Se acepta también en el nivel del curso, por los archivos
+    # escritos a mano con el esquema anterior.
+    groups_raw = moodle.get("groups", raw.get("groups"))
     if not isinstance(groups_raw, list) or not groups_raw:
         raise ConfigError(
-            f"{where} no tiene ningún grupo configurado.",
+            f"{where} no tiene ningún grupo de Moodle configurado.",
             remedio=(
-                "Agregá al menos un grupo en «groups». Para ver los grupos "
+                "Agregá al menos un grupo en «moodle.groups». Para ver los grupos "
                 f"disponibles ejecutá:  mnsync groups --course {course_id}"
             ),
         )
-    groups = tuple(_parse_group(g, course_id=course_id, index=i) for i, g in enumerate(groups_raw))
-    _validate_groups(groups, course_id=course_id)
+    groups = tuple(
+        _parse_moodle_group(g, course_id=course_id, index=i) for i, g in enumerate(groups_raw)
+    )
+    _validate_moodle_groups(groups, course_id=course_id)
+
+    # Los destinos son opcionales: si faltan, se descubren sondeando el servidor
+    # (specs/002, R-05). El asistente los escribe; a mano se pueden omitir.
+    destinos_raw = raw.get("destinos") or raw.get("destinations") or []
+    if not isinstance(destinos_raw, list):
+        raise ConfigError(
+            f"«destinos» en {where} debería ser una lista de bloques con «cu» y «grupo»."
+        )
+    destinations = tuple(
+        _parse_destination(d, course_id=course_id, index=i) for i, d in enumerate(destinos_raw)
+    )
+    _validate_destinations(destinations, course_id=course_id)
 
     pol_raw = raw.get("policy") or {}
     if not isinstance(pol_raw, dict):
@@ -367,6 +456,7 @@ def _parse_course(raw: Any, index: int) -> Course:
         moodle_course_id=moodle_course_id,
         np=np,
         groups=groups,
+        destinations=destinations,
         item_map=item_map,
         policy=policy,
     )

@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Estado** | Aprobado |
-| **Versión** | 1.0 |
+| **Estado** | Implementado |
+| **Versión** | 1.1 |
 | **Fecha** | 2026-08-21 |
 | **Depende de** | [001 — Modelo de dominio](001-modelo-de-dominio.md) |
 | **Lo usa** | [003 — Aplicación de escritorio](003-aplicacion-escritorio.md) |
@@ -120,14 +120,22 @@ Moodle. *(R-04)*
 > Con 40 estudiantes por varios instrumentos entre diez CU, una corrida legítima lo
 > supera siempre.
 
-**R-13.** El script del submódulo **NO DEBE** modificarse fuera de lo que autoriza
-R-14. Sus cuatro capas de seguridad —prueba por defecto, `--allow-update` obligatorio,
-justificación registrada y verificación posterior— dependen de entrar por su CLI.
+**R-13.** El script del submódulo **NO DEBE** modificarse. Sus cuatro capas de
+seguridad —prueba por defecto, `--allow-update` obligatorio, justificación registrada y
+verificación posterior— dependen de entrar por su CLI.
 
-**R-14.** Se autoriza un único cambio al submódulo, en una función de solo lectura:
+**R-14.** ~~Se autoriza un único cambio al submódulo, en una función de solo lectura:
 `_discover_grupo_for_cu` (`:1502`) **DEBE** devolver todos los grupos con coincidencia
-—no solo el de mayor solapamiento— y su `max_grupo` **DEBE** bajar de 15 a 5.
-*(D-04, D-09)*
+—no solo el de mayor solapamiento— y su `max_grupo` **DEBE** bajar de 15 a 5.~~
+**Retirado en v1.1: no hizo falta.** El submódulo quedó **sin modificar**, y R-13 se
+cumple por completo.
+
+> **Por qué se retiró.** El sondeo terminó haciéndose desde `mnsync`, usando el propio
+> `plan` del script como sonda: las filas que no son `skip_not_in_roster` son
+> exactamente las que el roster oficial reconoce. Así el emparejamiento lo sigue
+> haciendo el código ya probado, y la autodetección interna del script deja de
+> intervenir —ver §3, «Un archivo por centro universitario»—. Cambiar una función que
+> ya nadie llama habría sido tocar el submódulo sin ganar nada.
 
 ### Datos personales
 
@@ -157,6 +165,33 @@ suposición «un CU, un grupo» del script se cumple trivialmente.
 Se elige el abanico: el emparejamiento contra el roster es la parte que no puede estar
 mal, y este camino no la toca. Además satisface R-15 por construcción.
 
+### Un archivo por centro universitario
+
+Al planificar un destino, el script no se limita al `--cu-grupo` que se le pasa:
+**autodetecta un destino para cada centro universitario que encuentre en el xlsx**, y
+lo hace sondeando el servidor grupo por grupo. Con diez CU y seis destinos eso son
+cientos de consultas por corrida, y todas terminan descartadas, porque cada CU ya tiene
+su propio plan hecho con su destino explícito.
+
+La solución es no darle de qué autodetectar: `mnsync` junta a los estudiantes de todos
+los grupos de Moodle y los reparte en **un archivo por centro universitario**. Cada
+invocación recibe solo el archivo de su CU, con lo que el `--cu-grupo` explícito cubre
+a todos los estudiantes del archivo y no queda nada por adivinar.
+
+El agrupamiento previo (R-03) y el reparto por CU ocurren en el mismo paso, que es
+donde el grupo de Moodle deja de importar.
+
+### Recorte del plan a su destino
+
+Como defensa en profundidad, cada plan se recorta a las filas cuyo `(cu, grupo)`
+coincide con el destino que se pidió. Si alguna fila apareciera resuelta por
+autodetección, sus datos serían justamente los que pierden a los estudiantes del
+segundo grupo de un CU (D-04): no se descartan por prolijidad, sino porque no se puede
+confiar en ellas.
+
+Recortado cada plan a lo suyo, la unión de todos cubre a cada estudiante exactamente
+una vez, y cada fila proviene de una consulta hecha con el destino correcto.
+
 ### Cambios por archivo
 
 | Archivo | Cambio | Requisitos |
@@ -165,25 +200,26 @@ mal, y este camino no la toca. Además satisface R-15 por construcción.
 | `src/mnsync/sync.py` | La unidad de trabajo pasa a destino oficial. Se agrega el agrupamiento previo. `_assert_groups_are_distinct` (65-89) queda intacta. | R-03, R-04, R-11 |
 | `src/mnsync/uploader.py` | `plan()`/`apply()` (133-188): una invocación por destino, planes fusionados. | R-01, R-02 |
 | `src/mnsync/guard.py` | Se retira `UMBRAL_FUERA_DE_ROSTER` (27) y `_check_roster_match` (102-125) pasa al discriminador por patrón. El script ya emite motivos distintos en `:1603` y `:1630`. | R-06, R-09 |
-| `src/mnsync/moodle_export.py` | **Sin cambios.** | R-10 |
-| `vendor/grade-uploader/notasparciales_upload.py` | Solo `_discover_grupo_for_cu` (1502). | R-14 |
+| `src/mnsync/moodle_export.py` | Solo se añade `GradeExport.instituciones`, de lectura. La verificación de alcance queda intacta. | R-10 |
+| `vendor/grade-uploader/notasparciales_upload.py` | **Sin cambios.** | R-13 |
 
 ## 4. Criterios de aceptación
 
 Contra el servidor falso de `tests/`, con un escenario de dos grupos de Moodle, diez
 centros universitarios, un CU repartido en dos destinos y un estudiante sin destino:
 
-- [ ] **CA-01** Todo estudiante con destino recibe su nota, incluidos los dos del mismo CU que van a destinos distintos. *(R-01, R-02)*
-- [ ] **CA-02** Cambiar de qué grupo de Moodle proviene un estudiante no altera su destino. *(R-03)*
-- [ ] **CA-03** El estudiante sin destino aparece nombrado en el reporte y no impide que suban los demás. *(R-06, R-07)*
-- [ ] **CA-04** Con un CU cuyos estudiantes no emparejan ninguno, se detiene ese CU y solo ese. *(R-09)*
-- [ ] **CA-05** Con códigos de contexto equivocados, no se escribe absolutamente nada. *(R-09)*
-- [ ] **CA-06** Un roster manipulado para devolver una cédula repetida produce un fallo de sondeo, no un mensaje sobre el estudiante. *(R-08)*
-- [ ] **CA-07** La configuración escrita no contiene ninguna cédula. *(R-15)*
-- [ ] **CA-08** Las pruebas existentes de alcance de grupo siguen pasando sin modificarse. *(R-10, R-11)*
+- [x] **CA-01** Todo estudiante con destino recibe su nota, incluidos los dos del mismo CU que van a destinos distintos. *(R-01, R-02)* — `test_ca01_cada_estudiante_llega_a_su_destino`, `test_ca01_un_cu_repartido_en_dos_destinos`
+- [x] **CA-02** Cambiar de qué grupo de Moodle proviene un estudiante no altera su destino. *(R-03)* — `test_ca02_el_grupo_de_moodle_no_cambia_el_destino`
+- [x] **CA-03** El estudiante sin destino aparece nombrado en el reporte y no impide que suban los demás. *(R-06, R-07)* — `test_ca03_estudiante_sin_destino_no_detiene_al_resto`, `test_reporte_nombra_a_quien_se_quedo_sin_destino`
+- [x] **CA-04** Con un CU cuyos estudiantes no emparejan ninguno, se detiene ese CU y solo ese. *(R-09)* — `test_ca04_un_cu_sin_destino_no_arrastra_a_los_otros`, `test_un_cu_entero_sin_destino_bloquea_ese_cu`
+- [x] **CA-05** Con códigos de contexto equivocados, no se escribe absolutamente nada. *(R-09)* — `test_ca05_contexto_equivocado_no_escribe_nada`, `test_todos_los_cu_sin_destino_apuntan_a_los_codigos`
+- [ ] **CA-06** Un roster manipulado para devolver una cédula repetida produce un fallo de sondeo, no un mensaje sobre el estudiante. *(R-08)* — **pendiente:** falta la aserción interna
+- [x] **CA-07** La configuración escrita no contiene ninguna cédula. *(R-15)* — `test_ca07_la_configuracion_no_contiene_cedulas`
+- [x] **CA-08** Las pruebas existentes de alcance de grupo siguen pasando sin modificarse. *(R-10, R-11)* — `test_moodle_export.py` y `test_aborta_si_los_dos_grupos_traen_los_mismos_estudiantes`, sin tocar
 
 ## 5. Historial
 
 | Versión | Fecha | Cambio |
 |---------|-------|--------|
+| 1.1 | 2026-08-21 | Implementación. **R-14 retirado**: el submódulo quedó sin modificar. Se documentan dos mecanismos que la versión 1.0 no anticipaba: un archivo por centro universitario, y el recorte de cada plan a su destino. Siete de ocho criterios verificados; CA-06 queda pendiente. |
 | 1.0 | 2026-08-21 | Versión inicial. |

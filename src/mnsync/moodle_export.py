@@ -77,6 +77,16 @@ class GradeExport:
     def cedulas(self) -> set[str]:
         return {r.get(COL_CEDULA, "").strip() for r in self.rows if r.get(COL_CEDULA, "").strip()}
 
+    @property
+    def instituciones(self) -> list[str]:
+        """
+        La columna «Institución» de cada fila, en el orden en que vino.
+
+        De ahí sale el centro universitario de cada estudiante, que es lo que
+        acota la búsqueda de su destino (specs/001, D-08).
+        """
+        return [r.get(COL_INSTITUCION, "").strip() for r in self.rows]
+
     def __len__(self) -> int:
         return len(self.rows)
 

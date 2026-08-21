@@ -99,7 +99,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         for c in cfg.courses:
             print(f"     · {c.id}: curso Moodle {c.moodle_course_id}, {len(c.groups)} grupo(s)")
             for g in c.groups:
-                print(f"         - {g.label}: Moodle {g.moodle_group_id} → CU {g.cu}/grupo {g.grupo}")
+                print(f"         - grupo de Moodle {g.moodle_group_id}: {g.label}")
+            if c.destinations:
+                destinos = ", ".join(d.label for d in c.destinations)
+                print(f"         destinos en Notas Parciales: {destinos}")
+            else:
+                print("         destinos: se descubren solos la primera vez")
     except MnsyncError as e:
         print(f" ✗ {e.mensaje}")
         if e.remedio:
@@ -165,15 +170,16 @@ def cmd_groups(args: argparse.Namespace) -> int:
     print()
     print(" Los que dan «✓ configurado» ya están en courses.yml.")
     print()
-    print(" Para agregar uno, copiá esto bajo «groups:» de tu curso y completá")
-    print(" el CU y el grupo que le corresponden en Notas Parciales:")
+    print(" Para agregar uno, copiá esto bajo «moodle: groups:» de tu curso:")
     print()
     faltantes = [g for g in grupos if g.id not in configurados]
     ejemplo = faltantes[0] if faltantes else grupos[0]
-    print(f"      - moodle_group_id: {ejemplo.id}")
-    print(f'        name: "{ejemplo.name}"')
-    print('        cu: "42"        # ← el centro universitario')
-    print("        grupo: 1        # ← el número de grupo")
+    print(f"        - id: {ejemplo.id}")
+    print(f'          name: "{ejemplo.name}"')
+    print()
+    print(" No hace falta indicar centro universitario ni grupo de Notas")
+    print(" Parciales: un grupo de Moodle reúne estudiantes de varios centros,")
+    print(" y el programa averigua solo a dónde va cada uno.")
     print("=" * ANCHO)
 
     siguiente_paso(

@@ -19,17 +19,29 @@ fallo de un grupo no contamine a los demás.
 
 from __future__ import annotations
 
+import csv
 import os
+import re
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import Course, Credentials, Group
+from .config import Course, Credentials, Destination
 from .errors import UploaderError
 
 #: Acciones del plan que implican escribir en el sistema de la UNED.
 ACCIONES_DE_ESCRITURA = frozenset({"upload", "mark_not_presented", "would_overwrite"})
+
+#: La acción con la que el script marca a quien no está en el roster consultado.
+ACCION_SIN_ROSTER = "skip_not_in_roster"
+
+#: Hasta qué número de grupo se sondea al descubrir destinos (specs/001, D-09).
+MAX_GRUPO_SONDEO = 5
+
+#: «DESAMPARADOS (42)» → «42» (specs/001, D-08).
+_RE_INSTITUCION = re.compile(r"\((\d{1,3})\)\s*$")
 
 
 @dataclass
@@ -130,21 +142,26 @@ class Uploader:
         return RunResult(proc.returncode, proc.stdout or "", proc.stderr or "")
 
     # --- modos -----------------------------------------------------------
-    def plan(self, group: Group, xlsx: Path) -> tuple[Path, RunResult]:
+    def plan(self, destination: Destination, xlsx_paths: Sequence[Path]) -> tuple[Path, RunResult]:
         """
-        Genera el plan de un grupo.
+        Genera el plan de **un destino**, sobre el conjunto completo de xlsx.
 
-        El ``--cu-grupo`` va **explícito**, tomado de ``courses.yml``. Así el
-        script nunca recurre a su autodetección, que devuelve un solo grupo
-        por centro universitario y perdería en silencio a los estudiantes del
-        segundo grupo cuando el profesor da dos en el mismo CU.
+        Se le pasan todos los archivos del tutor a la vez, y un solo
+        ``--cu-grupo``. Así el script resuelve, con su propio emparejamiento
+        contra el roster oficial, cuáles de todos esos estudiantes pertenecen a
+        este destino: los demás quedan como ``skip_not_in_roster`` y los recoge
+        el plan de su propio destino (specs/002, R-01).
+
+        El ``--cu-grupo`` va explícito, de modo que el script nunca recurre a su
+        autodetección, que devuelve un solo grupo por centro universitario y
+        perdería a los estudiantes del segundo (specs/001, D-04).
         """
-        salida = self.work_dir / f"notas_plan_{group.slug}.csv"
-        args = [
-            "plan",
-            *self._context_args(),
-            "--xlsx", str(xlsx),
-            "--cu-grupo", f"{group.cu}={group.grupo}",
+        salida = self.work_dir / f"notas_plan_{destination.slug}.csv"
+        args = ["plan", *self._context_args()]
+        for x in xlsx_paths:
+            args += ["--xlsx", str(x)]
+        args += [
+            "--cu-grupo", f"{destination.cu}={destination.grupo}",
             "--output", str(salida),
         ]
         for header, codigo in self.course.item_map.items():
@@ -153,20 +170,22 @@ class Uploader:
         res = self._run(args)
         if not res.ok or not salida.exists():
             raise UploaderError(
-                f"No se pudo generar el plan del grupo «{group.label}».",
+                f"No se pudo generar el plan del destino «{destination.label}».",
                 remedio=_pista_de_error(res.salida()),
             )
+
+        _recortar_al_destino(salida, destination)
         return salida, res
 
     def apply(
         self,
-        group: Group,
+        destination: Destination,
         plan_path: Path,
         *,
         commit: bool,
         allow_update: bool,
     ) -> tuple[Path | None, RunResult]:
-        """Ejecuta el plan de un grupo. Sin ``commit=True`` no escribe nada."""
+        """Ejecuta el plan de un destino. Sin ``commit=True`` no escribe nada."""
         args = ["apply", *self._context_args(), "--plan", str(plan_path)]
         args.append("--commit" if commit else "--dry-run")
 
@@ -180,12 +199,151 @@ class Uploader:
         res = self._run(args)
         if not res.ok:
             raise UploaderError(
-                f"Falló la carga de notas del grupo «{group.label}».",
+                f"Falló la carga de notas del destino «{destination.label}».",
                 remedio=_pista_de_error(res.salida()),
             )
 
         resultados = plan_path.with_name(plan_path.stem + "_resultados.csv")
         return (resultados if resultados.exists() else None), res
+
+    # --- descubrimiento ---------------------------------------------------
+    def discover_destinations(
+        self,
+        cus: Sequence[str],
+        xlsx_por_cu: dict[str, Path],
+        *,
+        max_grupo: int = MAX_GRUPO_SONDEO,
+    ) -> list[Destination]:
+        """
+        Averigua a qué destinos van a parar los estudiantes, sondeando.
+
+        Por cada centro universitario presente se prueban los grupos 1 a
+        ``max_grupo`` y se conservan los que contienen a alguien
+        (specs/002, R-05). Un CU puede aportar varios destinos: es el caso
+        normal, no una anomalía (specs/001, D-04).
+
+        Todo son planes, y un plan nunca escribe. El sondeo es seguro por
+        construcción, no por promesa.
+
+        Se detiene el sondeo de un CU en cuanto todos sus estudiantes tienen
+        destino: en la práctica, casi siempre en el primer o segundo intento.
+        """
+        encontrados: list[Destination] = []
+
+        for cu in cus:
+            xlsx = xlsx_por_cu.get(cu)
+            if xlsx is None:
+                continue
+            pendientes = _cedulas_del_xlsx(xlsx)
+            for numero in range(1, max_grupo + 1):
+                if not pendientes:
+                    break
+                candidato = Destination(cu=cu, grupo=numero)
+                ubicados = self._cedulas_en_destino(candidato, [xlsx])
+                if not ubicados:
+                    continue
+                encontrados.append(candidato)
+                pendientes -= ubicados
+
+        return encontrados
+
+    def _cedulas_en_destino(
+        self, destination: Destination, xlsx_paths: Sequence[Path]
+    ) -> set[str]:
+        """
+        Las cédulas que el servidor reconoce como propias de este destino.
+
+        Se usa el propio ``plan`` como sonda: las filas que **no** son
+        ``skip_not_in_roster`` son exactamente las que el roster oficial
+        contiene. No se reimplementa el emparejamiento; se le pregunta al
+        código que ya lo hace bien (specs/002, R-13).
+        """
+        try:
+            plan_path, _ = self.plan(destination, xlsx_paths)
+        except UploaderError:
+            # Un grupo que no existe no es un error del sondeo: es una respuesta.
+            return set()
+
+        try:
+            return {
+                fila["cedula"]
+                for fila in leer_plan(plan_path)
+                if fila.get("accion") != ACCION_SIN_ROSTER and fila.get("cedula")
+            }
+        finally:
+            plan_path.unlink(missing_ok=True)
+
+
+def _cedulas_del_xlsx(path: Path) -> set[str]:
+    """Las cédulas que contiene un archivo de calificaciones."""
+    try:
+        import openpyxl
+    except ImportError:  # pragma: no cover - dependencia declarada
+        return set()
+
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        filas = wb.active.iter_rows(values_only=True)
+        encabezados = [str(c or "").strip() for c in next(filas, ())]
+        try:
+            i_id = encabezados.index("Número de ID")
+        except ValueError:
+            return set()
+        return {
+            str(fila[i_id]).strip()
+            for fila in filas
+            if i_id < len(fila) and str(fila[i_id] or "").strip()
+        }
+    finally:
+        wb.close()
+
+
+def _recortar_al_destino(plan_path: Path, destination: Destination) -> None:
+    """
+    Deja en el plan únicamente las filas de **este** destino.
+
+    Hace falta porque el script, además del ``--cu-grupo`` que le pasamos,
+    autodetecta un destino para cada centro universitario que encuentra en el
+    xlsx y planifica también esos. Esa autodetección devuelve **un solo grupo
+    por CU**, así que sus filas son justamente las que pierden a los estudiantes
+    del segundo grupo (specs/001, D-04): son datos en los que no se puede
+    confiar, y además duplicarían lo que ya planifica el destino que sí les
+    corresponde.
+
+    Recortando cada plan a lo suyo, la unión de todos los planes cubre a cada
+    estudiante exactamente una vez, y cada fila proviene de una consulta hecha
+    con el destino correcto y explícito.
+    """
+    with plan_path.open("r", encoding="utf-8-sig", newline="") as f:
+        lector = csv.DictReader(f)
+        campos = lector.fieldnames or []
+        propias = [
+            fila
+            for fila in lector
+            if (fila.get("cu") or "").strip() == destination.cu
+            and (fila.get("grupo") or "").strip() == str(destination.grupo)
+        ]
+
+    with plan_path.open("w", encoding="utf-8", newline="") as f:
+        escritor = csv.DictWriter(f, fieldnames=campos)
+        escritor.writeheader()
+        escritor.writerows(propias)
+
+
+def leer_plan(plan_path: Path) -> list[dict[str, str]]:
+    """Lee un ``plan.csv`` como filas ya limpias."""
+    with plan_path.open("r", encoding="utf-8-sig", newline="") as f:
+        return [{k: (v or "").strip() for k, v in fila.items()} for fila in csv.DictReader(f)]
+
+
+def cu_de_institucion(valor: str) -> str:
+    """
+    Extrae el código de centro universitario de la columna «Institución».
+
+    Moodle la escribe siempre como ``DESAMPARADOS (42)`` (specs/001, D-08).
+    """
+    m = _RE_INSTITUCION.search(valor or "")
+    return m.group(1) if m else ""
 
 
 def _pista_de_error(salida: str) -> str:
