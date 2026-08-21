@@ -159,9 +159,31 @@ copy courses.example.yml courses.yml
 
 ## 🔑 Configuración 1: tus credenciales
 
-Todo va en un archivo llamado **`.env`**. Ese archivo **nunca** se sube a Git: ya está protegido.
+Son cuatro contraseñas y usuarios, de **dos cuentas distintas**: la de Moodle y la del SSO de la UNED. Hay dos maneras de guardarlos.
 
-Son **cinco valores**, de **dos cuentas distintas**:
+### Opción A — En Windows, guardadas por el sistema *(recomendada)*
+
+```bash
+mnsync credenciales
+```
+
+Te pide los dos usuarios y las dos contraseñas, y las guarda en el **Administrador de credenciales de Windows**, cifradas contra tu cuenta de Windows. No queda ningún archivo con la contraseña adentro.
+
+Para ver qué hay guardado (usuarios sí, contraseñas nunca) o para borrarlo:
+
+```bash
+mnsync credenciales --ver
+mnsync credenciales --borrar
+```
+
+> [!NOTE]
+> **Qué protege esto y qué no.** Protege de otra persona que use la misma computadora, de que alguien copie el archivo, y —sobre todo— de que una carpeta sincronizada se lleve tus contraseñas a OneDrive sin que te enteres.
+>
+> No protege de un programa malicioso corriendo con tu propio usuario de Windows: la aplicación tiene que poder leerlas, así que cualquier cosa con tu mismo permiso también puede. Preferimos decirlo a sugerir una seguridad que no existe.
+
+### Opción B — Un archivo `.env`
+
+Es la vía de siempre, y la única en macOS y Linux. El archivo **nunca** se sube a Git: ya está protegido.
 
 ```ini
 # ─── Moodle ──────────────────────────────────────
@@ -178,7 +200,12 @@ NP_NTLM_PASSWORD=tu_contraseña_del_sso
 > En `NP_NTLM_USER` va **solo el nombre de usuario**, sin `@uned.ac.cr`.
 > Si tu correo es `jperez@uned.ac.cr`, poné `jperez`.
 
-Comprobá que quedó bien:
+> [!TIP]
+> `MOODLE_URL` se puede omitir: si no está, se usa `https://aprende.uned.ac.cr`. `mnsync doctor` siempre muestra cuál quedó en uso.
+
+### Si usás las dos
+
+Manda el `.env`. Y si además hay variables de entorno puestas —como en la automatización de GitHub— esas mandan sobre todo lo demás. `mnsync doctor` te dice de dónde salieron las que está usando:
 
 ```bash
 mnsync doctor

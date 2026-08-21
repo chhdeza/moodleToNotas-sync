@@ -6,8 +6,10 @@
 
 | # | Comando | Qué hace | ¿Escribe? |
 |---|---|---|---|
+| 0 | `mnsync credenciales` | Guarda las contraseñas en Windows (en vez de un `.env`) | No |
 | 1 | `mnsync doctor` | Revisa que todo esté bien configurado | No |
 | 2 | `mnsync groups --course <curso>` | Muestra tus grupos de Moodle con sus números | No |
+| 2b | `mnsync destinos --course <curso>` | A qué grupos de Notas Parciales van tus estudiantes | No |
 | 3 | `mnsync fetch --course <curso>` | Baja las notas a un Excel para revisar | No |
 | 4 | `mnsync plan --course <curso>` | Dice qué se subiría | No |
 | 5 | `mnsync rehearse --course <curso>` | Ensayo contra el sistema real | No |

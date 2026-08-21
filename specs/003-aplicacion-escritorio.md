@@ -65,12 +65,24 @@ demás.
 > filtro acertado el 95% de las veces esconde justo el grupo que hacía falta, sin
 > forma de recuperarlo.
 
-**A-05.** El asistente **DEBE** incluir un paso que recorra los menús de la pantalla de
-Captura de Notas para obtener los nueve códigos de contexto (`ano`, `pac`, `tipo`,
-`asignatura`, `escuela`, `catedra`, `encargado`, `tutor`, `modelo`).
+**A-05.** El asistente **DEBE** pedir los nueve códigos de contexto (`ano`, `pac`,
+`tipo`, `asignatura`, `escuela`, `catedra`, `encargado`, `tutor`, `modelo`) y **DEBE**
+verificarlos contra el servidor antes de dejar avanzar: si con esos códigos aparecen
+estudiantes, son los correctos.
 
-> Estos códigos **no** se pueden deducir de Moodle. Es la pantalla más delicada del
-> asistente.
+> **Por qué se escriben y no se eligen de un menú.** Estos códigos no se pueden deducir
+> de Moodle: salen de los menús de la pantalla de Captura de Notas. Reproducir esos
+> menús exigiría interpretar el HTML de esa página, y el asistente quedaría atado a que
+> no cambie nunca. Escribirlos una vez por curso y cuatrimestre, con verificación
+> inmediata, cuesta poco y no depende de nada.
+>
+> La verificación es lo que hace aceptable escribirlos: el sistema **no da error** ante
+> códigos que no corresponden —devuelve listas vacías—, así que sin ese paso el
+> profesor no tendría forma de saber que se equivocó hasta mucho después.
+
+**A-05.1.** La verificación **DEBE** informar cuántos estudiantes y cuántos grupos de
+Notas Parciales encontró, no solo que «funcionó». Un número que cuadra con lo que el
+profesor sabe de su curso es lo que convierte la comprobación en confianza.
 
 **A-06.** El asistente **DEBE** mostrar el enrutamiento resuelto para que el profesor
 lo confirme, agrupado por destino y con el conteo de estudiantes de cada uno.

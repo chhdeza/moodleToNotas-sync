@@ -16,7 +16,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import __version__
+from . import __version__, credstore
 from ._uploader_shim import vendor_script
 from .config import Config, Course, Credentials, load_config, load_credentials, missing_credentials
 from .errors import MnsyncError
@@ -64,6 +64,25 @@ def _grupos_pedidos(course: Course, args: argparse.Namespace):
     return [course.group_by_moodle_id(int(args.group))]
 
 
+def _origen_de_credenciales() -> str:
+    """
+    De dónde salieron las credenciales que se están usando.
+
+    Con tres orígenes posibles conviene decirlo: si alguien cambió la
+    contraseña en un lado y el programa la está tomando del otro, este renglón
+    es lo único que lo explica.
+    """
+    import os
+
+    if os.environ.get("MOODLE_PASSWORD"):
+        if Path(".env").exists():
+            return "del archivo .env o del entorno"
+        return "del entorno"
+    if credstore.leer(credstore.SERVICIO_MOODLE) is not None:
+        return "del Administrador de credenciales de Windows"
+    return "origen desconocido"
+
+
 # ---------------------------------------------------------------------------
 # doctor
 # ---------------------------------------------------------------------------
@@ -83,10 +102,16 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     creds = load_credentials(require=False)
     faltan = missing_credentials(creds)
     if faltan:
-        print(f" ✗ Faltan credenciales en el .env: {', '.join(faltan)}")
-        problemas.append("Copiá «.env.example» como «.env» y completá esos valores.")
+        print(f" ✗ Faltan credenciales: {', '.join(faltan)}")
+        if credstore.disponible():
+            problemas.append(
+                "Ejecutá «mnsync credenciales» para guardarlas en el sistema, "
+                "o copiá «.env.example» como «.env» y completá esos valores."
+            )
+        else:
+            problemas.append("Copiá «.env.example» como «.env» y completá esos valores.")
     else:
-        print(" ✓ Credenciales configuradas")
+        print(f" ✓ Credenciales configuradas ({_origen_de_credenciales()})")
         print(f"     · Moodle: {creds.moodle_username} en {creds.moodle_url}")
         print(f"     · Notas Parciales: {creds.np_user}")
     if not creds.np_is_real_server:
@@ -142,6 +167,101 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         ]
     )
     return 0
+
+
+# ---------------------------------------------------------------------------
+# credenciales
+# ---------------------------------------------------------------------------
+def cmd_credenciales(args: argparse.Namespace) -> int:
+    """
+    Guarda las contraseñas en el Administrador de credenciales de Windows.
+
+    Es la alternativa al archivo `.env`, y la que usa la aplicación de
+    escritorio: quedan cifradas contra la cuenta de Windows del profesor, en
+    vez de en un archivo de texto que cualquier carpeta sincronizada puede
+    llevarse a la nube.
+    """
+    import getpass
+
+    titulo("CREDENCIALES GUARDADAS EN EL SISTEMA")
+
+    if not credstore.disponible():
+        print(" ✗ Esta máquina no ofrece un almacén de credenciales.")
+        print()
+        print(" Usá el archivo «.env» en su lugar. Mirá «.env.example».")
+        return 1
+
+    if args.borrar:
+        for servicio in (credstore.SERVICIO_MOODLE, credstore.SERVICIO_NP):
+            credstore.borrar(servicio)
+        print(" ✓ Credenciales borradas del sistema.")
+        print()
+        print(" Si tenías un «.env», ese sigue como estaba: este comando no lo toca.")
+        return 0
+
+    if args.ver:
+        _mostrar_credenciales_guardadas()
+        return 0
+
+    print()
+    print(" Se piden dos veces: una para Moodle y otra para Notas Parciales.")
+    print(" Las contraseñas no se ven mientras se escriben, y no quedan en")
+    print(" ningún archivo.")
+    print()
+
+    try:
+        print(" ── Moodle ──")
+        usuario_moodle = input("   Usuario: ").strip()
+        clave_moodle = getpass.getpass("   Contraseña: ")
+        print()
+        print(" ── Notas Parciales ──")
+        print("   (el usuario va sin @uned.ac.cr)")
+        usuario_np = input("   Usuario: ").strip()
+        clave_np = getpass.getpass("   Contraseña: ")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        print(" Cancelado. No se guardó nada.")
+        return 130
+
+    faltan = not all([usuario_moodle, clave_moodle, usuario_np, clave_np])
+    if faltan:
+        raise MnsyncError(
+            "Quedó algún campo vacío, así que no se guardó nada.",
+            remedio="Volvé a ejecutar el comando y completá los cuatro valores.",
+        )
+
+    credstore.guardar(credstore.SERVICIO_MOODLE, usuario_moodle, clave_moodle)
+    credstore.guardar(credstore.SERVICIO_NP, usuario_np, clave_np)
+
+    print()
+    print(" ✓ Guardadas en el Administrador de credenciales de Windows.")
+    print("=" * ANCHO)
+
+    siguiente_paso(
+        [
+            "Comprobá que el sistema de la UNED las acepta:",
+            "",
+            "   mnsync doctor",
+        ]
+    )
+    return 0
+
+
+def _mostrar_credenciales_guardadas() -> None:
+    """Los usuarios guardados. **Nunca** las contraseñas."""
+    print()
+    for etiqueta, servicio in (
+        ("Moodle", credstore.SERVICIO_MOODLE),
+        ("Notas Parciales", credstore.SERVICIO_NP),
+    ):
+        cred = credstore.leer(servicio)
+        if cred is None:
+            print(f"   {etiqueta:<18} (nada guardado)")
+        else:
+            print(f"   {etiqueta:<18} {cred.username}")
+    print()
+    print(" Las contraseñas no se muestran nunca, ni siquiera a vos.")
+    print("=" * ANCHO)
 
 
 # ---------------------------------------------------------------------------
@@ -564,6 +684,14 @@ def build_parser() -> argparse.ArgumentParser:
     d = sub.add_parser("doctor", help="¿Está todo bien configurado?")
     d.add_argument("--offline", action="store_true", help="No probar la conexión")
     d.set_defaults(func=cmd_doctor)
+
+    cr = sub.add_parser(
+        "credenciales",
+        help="Guardar las contraseñas en el sistema, en vez de en un archivo",
+    )
+    cr.add_argument("--ver", action="store_true", help="Mostrar qué usuarios hay guardados")
+    cr.add_argument("--borrar", action="store_true", help="Borrar las credenciales guardadas")
+    cr.set_defaults(func=cmd_credenciales)
 
     g = sub.add_parser("groups", help="Ver los grupos del curso en Moodle")
     g.add_argument("--course", required=True, help="id del curso en courses.yml")

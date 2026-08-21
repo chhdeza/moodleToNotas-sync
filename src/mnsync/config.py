@@ -25,6 +25,12 @@ from .errors import ConfigError
 # falso local durante las pruebas mediante NP_BASE_URL.
 NP_BASE_URL_DEFAULT = "https://produccion.uned.ac.cr/notasparciales"
 
+# El Moodle de la UNED. Es una constante del programa, no algo que se deduzca
+# de datos del usuario: es la dirección a la que se le va a mandar una
+# contraseña, y adivinarla a partir de una entrada cualquiera sería regalarla.
+# `mnsync doctor` siempre muestra cuál quedó en uso.
+MOODLE_URL_DEFAULT = "https://aprende.uned.ac.cr"
+
 
 # ---------------------------------------------------------------------------
 # Credenciales
@@ -58,7 +64,15 @@ class Credentials:
 
 def load_credentials(env_path: Path | None = None, *, require: bool = True) -> Credentials:
     """
-    Lee el ``.env`` (si existe) y arma las credenciales.
+    Arma las credenciales a partir de los tres orígenes posibles.
+
+    En este orden de precedencia, y por una razón en cada escalón:
+
+    1. **Variables de entorno.** Es como llegan los secretos en GitHub Actions,
+       y tienen que ganarle a cualquier cosa que haya en el disco del runner.
+    2. **El archivo ``.env``.** El camino de quien desarrolla.
+    3. **El Administrador de credenciales de Windows.** El de la aplicación de
+       escritorio, y el único de los tres que cifra en reposo.
 
     Con ``require=False`` no exige que estén completas: sirve para que
     ``mnsync doctor`` pueda decir *cuáles* faltan en vez de morir en la
@@ -79,12 +93,18 @@ def load_credentials(env_path: Path | None = None, *, require: bool = True) -> C
     def get(name: str) -> str:
         return (os.environ.get(name) or "").strip()
 
+    guardadas = _credenciales_guardadas()
+
+    def con_respaldo(name: str, respaldo: str) -> str:
+        """Lo del entorno, y si no hay, lo del almacén del sistema."""
+        return get(name) or respaldo
+
     creds = Credentials(
-        moodle_url=get("MOODLE_URL").rstrip("/"),
-        moodle_username=get("MOODLE_USERNAME"),
-        moodle_password=get("MOODLE_PASSWORD"),
-        np_user=get("NP_NTLM_USER"),
-        np_password=get("NP_NTLM_PASSWORD"),
+        moodle_url=(get("MOODLE_URL") or MOODLE_URL_DEFAULT).rstrip("/"),
+        moodle_username=con_respaldo("MOODLE_USERNAME", guardadas["moodle_username"]),
+        moodle_password=con_respaldo("MOODLE_PASSWORD", guardadas["moodle_password"]),
+        np_user=con_respaldo("NP_NTLM_USER", guardadas["np_user"]),
+        np_password=con_respaldo("NP_NTLM_PASSWORD", guardadas["np_password"]),
         np_base_url=(get("NP_BASE_URL") or NP_BASE_URL_DEFAULT).rstrip("/"),
     )
 
@@ -99,6 +119,25 @@ def load_credentials(env_path: Path | None = None, *, require: bool = True) -> C
                 ),
             )
     return creds
+
+
+def _credenciales_guardadas() -> dict[str, str]:
+    """
+    Lo que haya en el almacén del sistema, o cadenas vacías.
+
+    Se consulta una sola vez por carga y nunca levanta: si no hay almacén, las
+    credenciales vienen de los otros dos orígenes y nadie se entera.
+    """
+    from . import credstore
+
+    moodle = credstore.leer(credstore.SERVICIO_MOODLE)
+    np = credstore.leer(credstore.SERVICIO_NP)
+    return {
+        "moodle_username": moodle.username if moodle else "",
+        "moodle_password": moodle.password if moodle else "",
+        "np_user": np.username if np else "",
+        "np_password": np.password if np else "",
+    }
 
 
 def _credential_fields(creds: Credentials) -> list[tuple[str, str]]:
