@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Estado** | Borrador |
-| **Versión** | 0.1 |
+| **Estado** | Borrador — etapa 2 implementada |
+| **Versión** | 0.2 |
 | **Fecha** | 2026-08-21 |
 | **Depende de** | [001 — Modelo de dominio](001-modelo-de-dominio.md), [002 — Enrutamiento multi-destino](002-enrutamiento-multi-destino.md) |
 | **Bloqueado por** | 002 tiene que estar implementado antes de empezar. |
@@ -209,4 +209,5 @@ consumir la misma configuración que produce el asistente.
 
 | Versión | Fecha | Cambio |
 |---------|-------|--------|
+| 0.2 | 2026-08-21 | A-05 se resuelve escribiendo los códigos con verificación inmediata, no reproduciendo los menús de la página: evita atarse a un HTML que nunca vimos. Se agrega A-05.1. Etapa 2 implementada en `discovery.py`. |
 | 0.1 | 2026-08-21 | Borrador inicial. |

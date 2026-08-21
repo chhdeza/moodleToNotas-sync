@@ -8,6 +8,7 @@
 |---|---|---|---|
 | 0 | `mnsync credenciales` | Guarda las contraseñas en Windows (en vez de un `.env`) | No |
 | 1 | `mnsync doctor` | Revisa que todo esté bien configurado | No |
+| 1b | `mnsync cursos` | Muestra tus cursos de Moodle con su número | No |
 | 2 | `mnsync groups --course <curso>` | Muestra tus grupos de Moodle con sus números | No |
 | 2b | `mnsync destinos --course <curso>` | A qué grupos de Notas Parciales van tus estudiantes | No |
 | 3 | `mnsync fetch --course <curso>` | Baja las notas a un Excel para revisar | No |

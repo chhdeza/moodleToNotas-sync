@@ -265,13 +265,23 @@ class Uploader:
             return set()
 
         try:
-            return {
-                fila["cedula"]
-                for fila in leer_plan(plan_path)
-                if fila.get("accion") != ACCION_SIN_ROSTER and fila.get("cedula")
-            }
+            return self.cedulas_del_plan(plan_path)
         finally:
             plan_path.unlink(missing_ok=True)
+
+    @staticmethod
+    def cedulas_del_plan(plan_path: Path) -> set[str]:
+        """
+        Las cédulas que el roster oficial reconoce como propias de ese plan.
+
+        Son las filas que **no** son ``skip_not_in_roster``: el resto son
+        estudiantes que pertenecen a otro destino.
+        """
+        return {
+            fila["cedula"]
+            for fila in leer_plan(plan_path)
+            if fila.get("accion") != ACCION_SIN_ROSTER and fila.get("cedula")
+        }
 
 
 def _cedulas_del_xlsx(path: Path) -> set[str]:

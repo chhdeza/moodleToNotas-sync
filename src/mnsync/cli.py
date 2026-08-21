@@ -19,11 +19,11 @@ from pathlib import Path
 from . import __version__, credstore
 from ._uploader_shim import vendor_script
 from .config import Config, Course, Credentials, load_config, load_credentials, missing_credentials
+from .discovery import verificar_contexto
 from .errors import MnsyncError
 from .moodle_export import MoodleSession
 from .report import write_report
-from .sync import fetch_groups, split_por_cu, sync_course
-from .uploader import Uploader
+from .sync import fetch_groups, sync_course
 
 ANCHO = 70
 
@@ -265,6 +265,62 @@ def _mostrar_credenciales_guardadas() -> None:
 
 
 # ---------------------------------------------------------------------------
+# cursos
+# ---------------------------------------------------------------------------
+def cmd_cursos(args: argparse.Namespace) -> int:
+    """
+    Los cursos que ves en Moodle, con su número.
+
+    Es para no tener que copiarlo de la barra del navegador. Si la lista sale
+    vacía o incompleta —depende del tema visual de Moodle— el número se puede
+    escribir a mano igual.
+    """
+    creds = load_credentials()
+
+    s = MoodleSession(creds.moodle_url)
+    s.login(creds.moodle_username, creds.moodle_password)
+    cursos = s.list_courses()
+
+    titulo("TUS CURSOS EN MOODLE")
+    print()
+    if not cursos:
+        print(" No se pudo leer la lista de cursos desde tu página de inicio.")
+        print()
+        print(" No es grave: abrí tu curso en Moodle y mirá la barra de direcciones.")
+        print(" El número que sigue a «id=» es el que va en «course_id».")
+        print()
+        print("   https://aprende.uned.ac.cr/course/view.php?id=8067")
+        print("                                                 ▲")
+        print("                                                 course_id")
+        return 0
+
+    configurados = _cursos_configurados(args)
+    for c in cursos:
+        marca = "✓ configurado" if c.id in configurados else ""
+        print(f"   {c.id:>8}  {c.name:<48} {marca}")
+    print("=" * ANCHO)
+
+    siguiente_paso(
+        [
+            "Poné el número del tuyo en courses.yml, como «course_id»,",
+            "y después mirá qué grupos tiene:",
+            "",
+            "   mnsync groups --course <tu-curso>",
+        ]
+    )
+    return 0
+
+
+def _cursos_configurados(args: argparse.Namespace) -> set[int]:
+    """Los course_id que ya están en courses.yml, si el archivo existe."""
+    try:
+        cfg = load_config(Path(args.config) if args.config else None)
+    except MnsyncError:
+        return set()
+    return {c.moodle_course_id for c in cfg.courses}
+
+
+# ---------------------------------------------------------------------------
 # groups
 # ---------------------------------------------------------------------------
 def cmd_groups(args: argparse.Namespace) -> int:
@@ -364,47 +420,59 @@ def cmd_destinos(args: argparse.Namespace) -> int:
     print(" escribe ni una nota.")
     print()
 
-    exports = fetch_groups(course, creds, work, groups=_grupos_pedidos(course, args))
-    xlsx_por_cu = split_por_cu(exports, work, course.id)
-    uploader = Uploader(course, creds, work)
+    check = verificar_contexto(course, creds, work, groups=_grupos_pedidos(course, args))
 
-    destinos = uploader.discover_destinations(sorted(xlsx_por_cu), xlsx_por_cu)
-
-    total = sum(len(ge.export) for ge in exports)
-    print(f" {total} estudiante(s) de {len(xlsx_por_cu)} centro(s) universitario(s).")
-    print()
-
-    if not destinos:
-        print(" ✗ No se encontró ningún grupo de Notas Parciales.")
-        print()
-        print(" Ninguno de tus estudiantes apareció en el sistema oficial. Eso no")
-        print(" suele ser un problema de matrícula: revisá «asignatura», «modelo»,")
-        print(" «pac» y «ano» en courses.yml contra los menús de la página de")
-        print(" Captura de Notas. Cuando esos códigos no corresponden, el sistema")
-        print(" no da error: devuelve listas vacías.")
+    if not check.ok:
+        print(f" ✗ {check.mensaje}")
+        if check.remedio:
+            print()
+            print(f"   {check.remedio}")
         return 1
 
-    print(f"   {'Grupo oficial':<26} {'Estudiantes'}")
-    print(f"   {'-' * 26} {'-' * 11}")
-    por_cu: dict[str, int] = {}
-    for d in destinos:
-        cuantos = len(uploader.cedulas_en_destino(d, [xlsx_por_cu[d.cu]]))
-        por_cu[d.cu] = por_cu.get(d.cu, 0) + cuantos
-        print(f"   CU {d.cu} · grupo {d.grupo:<12} {cuantos}")
+    print(f" ✓ {check.resumen}")
+    print()
+    print(f"   {'Grupo oficial':<28} {'Estudiantes'}")
+    print(f"   {'-' * 28} {'-' * 11}")
+    for cu in sorted(check.por_cu):
+        for d in check.por_cu[cu]:
+            cuantos = check.estudiantes_en.get(d.key, 0)
+            print(f"   CU {d.cu} · grupo {d.grupo:<16} {cuantos}")
     print("=" * ANCHO)
 
-    repartidos = [cu for cu, _ in por_cu.items() if sum(1 for d in destinos if d.cu == cu) > 1]
+    repartidos = [cu for cu, ds in check.por_cu.items() if len(ds) > 1]
     if repartidos:
         print()
-        print(f" Nota: el centro universitario {', '.join(repartidos)} aparece en más de")
+        print(f" El centro universitario {', '.join(sorted(repartidos))} aparece en más de")
         print(" un grupo. Es normal: no todos sus estudiantes están en el mismo.")
+
+    if check.sin_destino:
+        print()
+        print(f" ⚠ {len(check.sin_destino)} estudiante(s) no aparecen en ningún grupo")
+        print("   oficial. Sus notas no se van a subir:")
+        print()
+        for cedula, nombre, cu in check.sin_destino:
+            print(f"     {cedula:<14} {nombre or '(sin nombre)':<32} CU {cu}")
+        print()
+        print("   Suele significar que no quedaron matriculados en esta asignatura.")
+        print("   Consultalo con registro antes del cierre de actas.")
+
+    sin_emparejar = check.columnas_sin_emparejar
+    if sin_emparejar:
+        print()
+        print(" ⚠ Estas columnas de Moodle no se reconocieron y NO se van a subir:")
+        print()
+        for i in sin_emparejar:
+            print(f"     · {i.columna}")
+        print()
+        print("   Indicá a mano cuál instrumento les corresponde, con «item_map»")
+        print("   en courses.yml. Mirá «courses.example.yml».")
 
     print()
     print(" Para que las próximas corridas no tengan que volver a averiguarlo,")
     print(" copiá esto en courses.yml, dentro de tu curso:")
     print()
     print("    destinos:")
-    for d in destinos:
+    for d in check.destinos:
         print(f'      - cu: "{d.cu}"')
         print(f"        grupo: {d.grupo}")
 
@@ -692,6 +760,9 @@ def build_parser() -> argparse.ArgumentParser:
     cr.add_argument("--ver", action="store_true", help="Mostrar qué usuarios hay guardados")
     cr.add_argument("--borrar", action="store_true", help="Borrar las credenciales guardadas")
     cr.set_defaults(func=cmd_credenciales)
+
+    cu = sub.add_parser("cursos", help="Ver tus cursos de Moodle con su número")
+    cu.set_defaults(func=cmd_cursos)
 
     g = sub.add_parser("groups", help="Ver los grupos del curso en Moodle")
     g.add_argument("--course", required=True, help="id del curso en courses.yml")

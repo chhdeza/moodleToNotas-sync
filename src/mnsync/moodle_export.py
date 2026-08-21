@@ -52,6 +52,33 @@ COLUMNAS_NO_NOTA = frozenset(
 )
 
 
+#: Enlaces a un curso, tal como los escribe Moodle con cualquier tema visual.
+_RE_ENLACE_CURSO = re.compile(
+    r'<a\b[^>]*href="[^"]*?/course/view\.php\?id=(?P<id>\d+)[^"]*"[^>]*>(?P<texto>.*?)</a>',
+    re.IGNORECASE | re.DOTALL,
+)
+
+_RE_ETIQUETA = re.compile(r"<[^>]+>")
+
+
+def _texto_plano(html: str) -> str:
+    """El texto de un enlace, sin etiquetas ni espacios de más."""
+    import html as _html
+
+    return re.sub(r"\s+", " ", _html.unescape(_RE_ETIQUETA.sub(" ", html))).strip()
+
+
+@dataclass
+class MoodleCourse:
+    """Un curso tal como lo ve Moodle."""
+
+    id: int
+    name: str
+
+    def __str__(self) -> str:
+        return f"{self.name} (id {self.id})"
+
+
 @dataclass
 class MoodleGroup:
     """Un grupo tal como lo ve Moodle."""
@@ -191,6 +218,39 @@ class MoodleSession:
                 ),
             ) from e
         return r.text
+
+    def list_courses(self) -> list[MoodleCourse]:
+        """
+        Los cursos que el profesor puede ver, según su página de inicio.
+
+        Se leen los enlaces a ``course/view.php?id=N``, que es lo único que
+        Moodle escribe igual con cualquier tema visual. La lista es una ayuda
+        para no tener que copiar el número de la barra del navegador: si
+        estuviera incompleta, el número se puede escribir a mano y el programa
+        funciona igual.
+        """
+        self._require_login()
+        vistos: dict[int, str] = {}
+
+        for ruta in ("/my/courses.php", "/my/", "/"):
+            try:
+                r = self.session.get(f"{self.base_url}{ruta}", timeout=self.timeout)
+                r.raise_for_status()
+            except requests.RequestException:
+                continue
+
+            for m in _RE_ENLACE_CURSO.finditer(r.text):
+                course_id = int(m.group("id"))
+                nombre = _texto_plano(m.group("texto"))
+                if nombre and (course_id not in vistos or not vistos[course_id]):
+                    vistos[course_id] = nombre
+                else:
+                    vistos.setdefault(course_id, nombre)
+
+            if vistos:
+                break
+
+        return [MoodleCourse(id=cid, name=nombre) for cid, nombre in sorted(vistos.items())]
 
     def list_groups(self, course_id: int) -> list[MoodleGroup]:
         """
