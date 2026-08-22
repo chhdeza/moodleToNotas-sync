@@ -24,7 +24,7 @@ la mitad de una sincronización (A-14).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -89,27 +89,86 @@ FILTROS: tuple[tuple[str, tuple[str, ...] | None], ...] = (
 )
 
 
+#: Los tres desenlaces posibles de comprobar una credencial.
+#:
+#: El tercero es el que faltaba y el que más importa. Sin él, cualquier fallo
+#: —el servidor caído, un parámetro que el programa no mandó, la red— se
+#: reportaba como «no aceptó tus datos», y eso manda a cambiar una contraseña
+#: que estaba bien. Perder el acceso a los sistemas de la UNED por un aviso
+#: equivocado es un daño real, y peor que no haber avisado nada.
+OK = "ok"
+RECHAZADO = "rechazado"
+SIN_COMPROBAR = "sin_comprobar"
+
+
+@dataclass
+class Ingreso:
+    """Cómo respondió un sistema a las credenciales guardadas."""
+
+    nombre: str
+    estado: str = SIN_COMPROBAR
+    detalle: str = ""
+    remedio: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.estado == OK
+
+    @property
+    def rechazado(self) -> bool:
+        return self.estado == RECHAZADO
+
+    @property
+    def marca(self) -> str:
+        if self.ok:
+            return f"✓ {self.nombre}"
+        if self.rechazado:
+            return f"✗ {self.nombre}"
+        return f"· {self.nombre}"
+
+    @property
+    def explicacion(self) -> str:
+        """Qué pasó y qué hacer, para quien necesite leerlo entero."""
+        if self.ok:
+            return ""
+        encabezado = (
+            f"{self.nombre}: parece que cambió tu contraseña."
+            if self.rechazado
+            else f"{self.nombre}: no se pudo comprobar."
+        )
+        return "\n".join(x for x in (encabezado, self.detalle, self.remedio) if x)
+
+
 @dataclass
 class EstadoIngresos:
     """
     Cómo respondieron los dos sistemas a las credenciales guardadas.
 
     Se comprueban por separado porque son dos cuentas distintas y fallan por
-    motivos distintos: decir «falló el ingreso» sin decir cuál de los dos
-    manda al profesor a cambiar la contraseña que no era.
+    motivos distintos: decir «falló el ingreso» sin decir cuál de los dos manda
+    al profesor a revisar la contraseña que no era.
     """
 
-    moodle_ok: bool = False
-    np_ok: bool = False
+    moodle: Ingreso = field(default_factory=lambda: Ingreso("Moodle"))
+    np: Ingreso = field(default_factory=lambda: Ingreso("Notas Parciales"))
     faltan: tuple[str, ...] = ()
-    fallo_moodle: str = ""
-    fallo_np: str = ""
-    #: Si no había un curso configurado, a Notas Parciales ni se le preguntó.
-    np_consultado: bool = True
 
     @property
-    def ok(self) -> bool:
-        return not self.faltan and self.moodle_ok and (self.np_ok or not self.np_consultado)
+    def hay_rechazo(self) -> bool:
+        return self.moodle.rechazado or self.np.rechazado
+
+    @property
+    def puede_revisar(self) -> bool:
+        """
+        Si tiene sentido intentar la revisión.
+
+        Alcanza con que Moodle responda y que nada haya sido rechazado. Que a
+        Notas Parciales no se lo haya podido comprobar **no** detiene nada: la
+        revisión es justamente lo que averigua los grupos oficiales, y exigir
+        que ya estuvieran averiguados para poder averiguarlos no dejaría
+        empezar nunca.
+        """
+        return not self.faltan and self.moodle.ok and not self.hay_rechazo
 
     @property
     def texto(self) -> str:
@@ -117,18 +176,12 @@ class EstadoIngresos:
             return (
                 "Faltan credenciales: "
                 + ", ".join(self.faltan)
-                + ".\nConfigurá el curso de nuevo para volver a guardarlas."
+                + ".\nPulsá «Configurar un curso…» para volver a guardarlas."
             )
 
-        partes: list[str] = []
-        partes.append("✓ Moodle" if self.moodle_ok else "✗ Moodle: " + self.fallo_moodle)
-        if not self.np_consultado:
-            partes.append("· Notas Parciales: sin curso configurado todavía")
-        elif self.np_ok:
-            partes.append("✓ Notas Parciales")
-        else:
-            partes.append("✗ Notas Parciales: " + self.fallo_np)
-        return "   ".join(partes)
+        linea = f"{self.moodle.marca}   {self.np.marca}"
+        detalles = [i.explicacion for i in (self.moodle, self.np) if i.explicacion]
+        return "\n\n".join([linea, *detalles])
 
 
 @dataclass
@@ -296,7 +349,7 @@ class Ventana(QMainWindow):
 
     def _con_ingresos(self, estado: EstadoIngresos) -> None:
         self.ingresos.setText(estado.texto)
-        if estado.ok and self.curso is not None:
+        if estado.puede_revisar and self.curso is not None:
             self.revisar()
 
     # --- revisar (fases A y B, sin escribir) ------------------------------
@@ -702,49 +755,55 @@ def revisar_ingresos(
     que es su comprobación más barata, y solo si hay un curso configurado: sin
     los códigos de la asignatura no hay nada que preguntarle.
 
+    Un fallo solo se llama «rechazo» cuando la respuesta del servidor lo dice.
+    Todo lo demás queda como «no se pudo comprobar», con el detalle a la vista
+    (specs/003, A-14).
+
     Ninguna de las dos escribe nada.
     """
     from ..config import missing_credentials
     from ..moodle_export import MoodleSession
+    from ..uploader import parece_rechazo_de_credenciales
 
     faltan = tuple(missing_credentials(creds))
     if faltan:
         return EstadoIngresos(faltan=faltan)
 
-    estado = EstadoIngresos(np_consultado=course is not None)
+    estado = EstadoIngresos()
 
     try:
         sesion = MoodleSession(creds.moodle_url)
         sesion.login(creds.moodle_username, creds.moodle_password)
-        estado.moodle_ok = True
+        estado.moodle.estado = OK
     except MnsyncError as e:
-        estado.fallo_moodle = _vencida(e)
+        _anotar(estado.moodle, e, rechazo="rechaz" in e.mensaje.lower())
 
-    if course is not None:
-        try:
-            Uploader(course, creds, work_dir).probar_ingreso()
-            estado.np_ok = True
-        except MnsyncError as e:
-            estado.fallo_np = _vencida(e)
+    if course is None:
+        estado.np.remedio = "Todavía no hay ningún curso configurado."
+        return estado
+
+    try:
+        Uploader(course, creds, work_dir).probar_ingreso()
+        estado.np.estado = OK
+    except MnsyncError as e:
+        _anotar(
+            estado.np,
+            e,
+            rechazo=parece_rechazo_de_credenciales(f"{e.mensaje} {e.remedio or ''}"),
+        )
 
     return estado
 
 
-def _vencida(error: MnsyncError) -> str:
-    """
-    Un rechazo de credenciales se nombra como lo que es (specs/003, A-14).
-
-    El resto de los fallos se dejan tal cual: inventarles «se venció tu
-    contraseña» a un servidor caído mandaría al profesor a cambiar una
-    contraseña que estaba bien.
-    """
-    texto = (error.mensaje + " " + (error.remedio or "")).lower()
-    if "rechaz" in texto or "usuario o la contraseña" in texto or "401" in texto:
-        return (
-            "parece que cambió tu contraseña. Configurá el curso de nuevo para "
-            "guardar la nueva."
-        )
-    return error.mensaje
+def _anotar(ingreso: Ingreso, error: MnsyncError, *, rechazo: bool) -> None:
+    """Deja en el ingreso lo que pasó, sin adornarlo ni suavizarlo."""
+    ingreso.estado = RECHAZADO if rechazo else SIN_COMPROBAR
+    ingreso.detalle = "" if rechazo else error.mensaje
+    ingreso.remedio = (
+        "Volvé a configurar el curso para guardar la nueva."
+        if rechazo
+        else (error.remedio or "")
+    )
 
 
 def ensayar_corrida(

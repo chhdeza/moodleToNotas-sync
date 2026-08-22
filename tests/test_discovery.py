@@ -324,3 +324,120 @@ def test_sin_cursos_devuelve_lista_vacia_y_no_falla():
     s.login("profe", "clave")
 
     assert s.list_courses() == []
+
+
+# ---------------------------------------------------------------------------
+# La lista de cursos cuando Moodle la dibuja con JavaScript
+# ---------------------------------------------------------------------------
+PAGINA_CON_SESSKEY = """<!DOCTYPE html>
+<html><head>
+<script>M.cfg = {"wwwroot":"https://aprende.uned.ac.cr","sesskey":"AbC123xy"};</script>
+</head><body>
+  <div data-region="courses-view"><!-- lo llena JavaScript --></div>
+</body></html>
+"""
+
+
+def _respuesta_del_servicio(cursos):
+    return [{"error": False, "data": {"courses": cursos, "nextoffset": 0}}]
+
+
+@responses.activate
+def test_los_cursos_se_piden_al_servicio_que_usa_el_propio_moodle():
+    """
+    Desde Moodle 4, «Mis cursos» se dibuja con JavaScript.
+
+    El HTML que llega no trae ningún curso, así que raspar enlaces devuelve una
+    lista vacía **aunque el ingreso haya sido correcto**: exactamente el fallo
+    que se vio en pantalla. Preguntándole al mismo servicio que consulta el
+    navegador se obtiene lo que el profesor ve.
+    """
+    responses.add(responses.GET, f"{BASE_MOODLE}/login/index.php", body=fx.LOGIN_PAGE)
+    responses.add(responses.POST, f"{BASE_MOODLE}/login/index.php", body=fx.LOGIN_OK)
+    responses.add(responses.GET, f"{BASE_MOODLE}/my/", body=PAGINA_CON_SESSKEY, status=200)
+    responses.add(
+        responses.POST,
+        f"{BASE_MOODLE}/lib/ajax/service.php",
+        json=_respuesta_del_servicio(
+            [
+                {"id": 9639, "fullname": "Introducci&oacute;n a la Ciberseguridad"},
+                {"id": 8067, "fullname": "Redes de Computadoras"},
+            ]
+        ),
+        status=200,
+    )
+
+    s = MoodleSession(BASE_MOODLE)
+    s.login("profe", "clave")
+    cursos = s.list_courses()
+
+    assert [c.id for c in cursos] == [8067, 9639]
+    assert cursos[1].name == "Introducción a la Ciberseguridad"
+
+
+@responses.activate
+def test_la_clave_de_sesion_tambien_se_lee_de_un_formulario():
+    """Qué forma toma el sesskey depende del tema visual; se aceptan las dos."""
+    responses.add(responses.GET, f"{BASE_MOODLE}/login/index.php", body=fx.LOGIN_PAGE)
+    responses.add(responses.POST, f"{BASE_MOODLE}/login/index.php", body=fx.LOGIN_OK)
+    responses.add(
+        responses.GET,
+        f"{BASE_MOODLE}/my/",
+        body='<form><input type="hidden" name="sesskey" value="ZzZ999" /></form>',
+        status=200,
+    )
+    responses.add(
+        responses.POST,
+        f"{BASE_MOODLE}/lib/ajax/service.php",
+        json=_respuesta_del_servicio([{"id": 7, "fullname": "Algoritmos"}]),
+        status=200,
+    )
+
+    s = MoodleSession(BASE_MOODLE)
+    s.login("profe", "clave")
+
+    assert [c.id for c in s.list_courses()] == [7]
+
+
+@responses.activate
+def test_si_el_servicio_falla_se_vuelve_a_leer_la_pagina():
+    """
+    Son dos fuentes, no una con reemplazo.
+
+    Un Moodle más viejo, o con el servicio cerrado por configuración, sigue
+    teniendo los enlaces en el HTML. Que falle la primera no puede dejar sin
+    lista a quien sí la tendría por la segunda.
+    """
+    responses.add(responses.GET, f"{BASE_MOODLE}/login/index.php", body=fx.LOGIN_PAGE)
+    responses.add(responses.POST, f"{BASE_MOODLE}/login/index.php", body=fx.LOGIN_OK)
+    responses.add(responses.GET, f"{BASE_MOODLE}/my/", body=PAGINA_CON_SESSKEY, status=200)
+    responses.add(responses.POST, f"{BASE_MOODLE}/lib/ajax/service.php", status=404)
+    responses.add(
+        responses.GET, f"{BASE_MOODLE}/my/courses.php", body=PAGINA_MIS_CURSOS, status=200
+    )
+
+    s = MoodleSession(BASE_MOODLE)
+    s.login("profe", "clave")
+
+    assert [c.id for c in s.list_courses()] == [8067, 9001]
+
+
+@responses.activate
+def test_un_error_del_servicio_no_se_toma_por_una_lista():
+    """Moodle contesta 200 con «error: true»; eso no es una lista de cursos."""
+    responses.add(responses.GET, f"{BASE_MOODLE}/login/index.php", body=fx.LOGIN_PAGE)
+    responses.add(responses.POST, f"{BASE_MOODLE}/login/index.php", body=fx.LOGIN_OK)
+    responses.add(responses.GET, f"{BASE_MOODLE}/my/", body=PAGINA_CON_SESSKEY, status=200)
+    responses.add(
+        responses.POST,
+        f"{BASE_MOODLE}/lib/ajax/service.php",
+        json=[{"error": True, "exception": {"message": "Invalid session key"}}],
+        status=200,
+    )
+    for ruta in ("/my/courses.php", "/"):
+        responses.add(responses.GET, f"{BASE_MOODLE}{ruta}", body="<html></html>", status=200)
+
+    s = MoodleSession(BASE_MOODLE)
+    s.login("profe", "clave")
+
+    assert s.list_courses() == []

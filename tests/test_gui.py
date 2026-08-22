@@ -205,9 +205,9 @@ from mnsync.gui.ventana import (  # noqa: E402
     ORDEN_ACCIONES,
     Contexto,
     EstadoIngresos,
+    Ingreso,
     Ventana,
     _texto_recuento,
-    _vencida,
     texto_confirmacion,
 )
 from mnsync.sync import FilaPlan  # noqa: E402
@@ -363,109 +363,132 @@ def test_la_confirmacion_cuenta_lo_que_se_deja_como_esta():
 
 def test_una_contrasena_rechazada_se_nombra_como_tal():
     """A-14: «parece que cambió tu contraseña», no un fallo indescifrable."""
-    from mnsync.errors import MoodleError
+    from mnsync.gui.ventana import RECHAZADO
 
-    texto = _vencida(MoodleError("Moodle rechazó el usuario o la contraseña."))
-    assert "cambió tu contraseña" in texto
+    ingreso = Ingreso("Moodle", estado=RECHAZADO)
+    assert "cambió tu contraseña" in ingreso.explicacion
+    assert ingreso.marca.startswith("✗")
 
 
-def test_un_servidor_caido_no_se_confunde_con_una_contrasena_vencida():
+def test_un_fallo_que_no_es_de_credenciales_no_acusa_a_la_contrasena():
     """
-    Mandar a cambiar una contraseña que estaba bien es peor que no decir nada.
+    Decir «se venció tu contraseña» cuando falló otra cosa hace daño real.
 
-    El profesor la cambia, pierde el acceso a los otros sistemas de la UNED, y
-    el problema original —que el servidor no respondía— sigue igual.
+    El profesor la cambia, pierde el acceso a los demás sistemas de la UNED, y
+    el problema original —el servidor caído, un parámetro que no mandamos—
+    sigue exactamente igual. Ante la duda: «no se pudo comprobar».
     """
-    from mnsync.errors import UploaderError
+    ingreso = Ingreso(
+        "Notas Parciales",
+        detalle="El servidor de la UNED no respondió a tiempo.",
+        remedio="Probá de nuevo más tarde.",
+    )
 
-    texto = _vencida(UploaderError("El servidor de la UNED no respondió a tiempo."))
-    assert "contraseña" not in texto
+    assert "contraseña" not in ingreso.explicacion
+    assert "no se pudo comprobar" in ingreso.explicacion
+    # Y el detalle llega entero: sin él, el aviso es un callejón sin salida.
+    assert "no respondió a tiempo" in ingreso.explicacion
+    assert "Probá de nuevo más tarde" in ingreso.explicacion
+
+
+def test_solo_la_salida_del_servidor_decide_si_hubo_rechazo():
+    """
+    El reconocimiento se hace sobre la respuesta real, no sobre una corazonada.
+
+    Esto es lo que separa «tu contraseña venció» de «el script se cayó antes de
+    conectarse», que fue exactamente el fallo que hizo falta arreglar.
+    """
+    from mnsync.uploader import parece_rechazo_de_credenciales
+
+    assert parece_rechazo_de_credenciales("HTTP 401 al pedir la tabla")
+    assert parece_rechazo_de_credenciales("Faltan credenciales NTLM en .env")
+    assert not parece_rechazo_de_credenciales(
+        "error: the following arguments are required: --cu, --grupo"
+    )
+    assert not parece_rechazo_de_credenciales("")
+
+
+def test_no_poder_comprobar_notas_parciales_no_frena_la_revision():
+    """
+    La revisión es lo que averigua los grupos oficiales.
+
+    Exigir que ya estuvieran averiguados para poder averiguarlos dejaría al
+    profesor sin forma de empezar nunca.
+    """
+    estado = EstadoIngresos()
+    estado.moodle.estado = "ok"
+    estado.np.detalle = "Este curso aún no tiene grupos oficiales averiguados."
+
+    assert estado.puede_revisar
+
+
+def test_una_credencial_rechazada_si_frena_la_revision():
+    from mnsync.gui.ventana import RECHAZADO
+
+    estado = EstadoIngresos()
+    estado.moodle.estado = "ok"
+    estado.np.estado = RECHAZADO
+
+    assert not estado.puede_revisar
 
 
 def test_sin_curso_configurado_no_se_le_reprocha_nada_a_notas_parciales():
     """No se le preguntó, así que no puede decirse que falló."""
-    estado = EstadoIngresos(moodle_ok=True, np_consultado=False)
+    estado = EstadoIngresos()
+    estado.moodle.estado = "ok"
+    estado.np.remedio = "Todavía no hay ningún curso configurado."
 
-    assert estado.ok
-    assert "sin curso configurado" in estado.texto
-
-
-def test_cambiar_de_curso_no_deja_autorizaciones_colgando(ventana):
-    """
-    Vaciar la tabla destruye sus celdas del lado de Qt.
-
-    Si las autorizaciones siguieran apuntando a celdas destruidas, la siguiente
-    lectura reventaría con un error de C++ que no significa nada para nadie —y
-    lo haría justo al pulsar «Sincronizar».
-    """
-    from PySide6.QtCore import Qt
-
-    _con_filas(ventana, [_fila("001", "would_overwrite")])
-    ventana.tabla.item(0, 7).setCheckState(Qt.CheckState.Checked)
-
-    ventana._cambio_de_curso()
-
-    assert ventana.autorizadas() == set()
-    assert ventana.tabla.rowCount() == 0
+    assert not estado.np.rechazado
+    assert estado.np.marca.startswith("·")
+    assert "Todavía no hay ningún curso" in estado.texto
 
 
 # ---------------------------------------------------------------------------
-# La cédula del tutor: pedida, explicada y propuesta
+# El número de curso se puede escribir
 # ---------------------------------------------------------------------------
 @pytest.fixture
-def paso_credenciales(tmp_path):
-    """El primer paso del asistente, con el campo de cédula ya vacío."""
+def paso_grupos(tmp_path):
+    """El segundo paso del asistente, sin credenciales todavía."""
     from mnsync.gui.asistente import construir_asistente
 
     asistente = construir_asistente(tmp_path)
-    paso = asistente.page(asistente.pageIds()[0])
-    paso.tutor.setText("")
-    yield paso
+    yield asistente.page(asistente.pageIds()[1])
     asistente.close()
 
 
-def test_la_cedula_se_propone_desde_el_usuario_de_moodle(paso_credenciales):
+def test_un_numero_escrito_a_mano_vale_como_curso(paso_grupos):
     """
-    En la UNED se entra a Moodle con la cédula: es el mismo dato dos veces.
+    Leer la lista de cursos depende de cómo arme Moodle su página de inicio.
 
-    Se propone y no se impone. Una propuesta equivocada la atrapa la
-    comprobación del paso 3, que es contra el servidor.
+    Cuando no se puede leer —y con Moodle 4 pasa— el asistente no puede quedarse
+    sin salida: el número está a la vista en la barra del navegador, y
+    escribirlo tiene que alcanzar.
     """
-    paso_credenciales.moodle_usuario.setText("0401780367")
-    assert paso_credenciales.tutor.text() == "0401780367"
+    paso_grupos.cursos.setCurrentText("8067")
+
+    curso = paso_grupos.curso_elegido()
+    assert curso is not None
+    assert curso.id == 8067
 
 
-def test_un_usuario_de_moodle_que_no_es_cedula_no_propone_nada(paso_credenciales):
-    """Rellenar con algo que no es una cédula sería peor que dejarlo vacío."""
-    paso_credenciales.moodle_usuario.setText("chernandeza")
-    assert paso_credenciales.tutor.text() == ""
+def test_lo_escrito_que_no_es_un_numero_no_se_toma_por_un_curso(paso_grupos):
+    paso_grupos.cursos.setCurrentText("no sé cuál es")
+    assert paso_grupos.curso_elegido() is None
 
 
-def test_la_propuesta_no_pisa_lo_que_se_escribio_a_mano(paso_credenciales):
+def test_elegir_de_la_lista_sigue_ganando(paso_grupos):
     """
-    Quien escribió su cédula ya decidió.
+    Un curso de la lista trae su nombre, y el nombre arma el apodo del curso.
 
-    Un profesor cuyo usuario de Moodle NO es su cédula la corrige a mano; si al
-    tocar el otro campo se le volviera a cambiar, el asistente le discutiría el
-    único dato que él sabe y nosotros no.
+    Si al elegirlo se leyera solo el texto visible, se perdería el nombre y el
+    apodo saldría de un número que no le dice nada a nadie.
     """
-    paso_credenciales.tutor.setText("111111111")
-    paso_credenciales.moodle_usuario.setText("0401780367")
-    assert paso_credenciales.tutor.text() == "111111111"
+    from mnsync.moodle_export import MoodleCourse
 
+    curso = MoodleCourse(9639, "Introducción a la Ciberseguridad")
+    paso_grupos.cursos.addItem(f"{curso.name}   ({curso.id})", curso)
+    paso_grupos.cursos.setCurrentIndex(0)
 
-def test_falta_la_cedula_se_dice_con_el_nombre_que_tiene_en_pantalla(paso_credenciales):
-    """
-    «Falta completar: cédula» no se encuentra en la pantalla.
-
-    El aviso tiene que nombrar el campo tal como está rotulado, o quien lo lee
-    busca algo que no existe con ese nombre.
-    """
-    paso_credenciales.moodle_usuario.setText("chernandeza")
-    paso_credenciales.moodle_clave.setText("x")
-    paso_credenciales.np_usuario.setText("chernandeza")
-    paso_credenciales.np_clave.setText("x")
-
-    paso_credenciales._comprobar()
-
-    assert "tu cédula de tutora o tutor" in paso_credenciales.estado.text()
+    elegido = paso_grupos.curso_elegido()
+    assert elegido == curso
+    assert elegido.name == "Introducción a la Ciberseguridad"

@@ -214,7 +214,7 @@ class Uploader:
         return (resultados if resultados.exists() else None), res
 
     # --- comprobaciones ---------------------------------------------------
-    def probar_ingreso(self) -> RunResult:
+    def probar_ingreso(self, destination: Destination | None = None) -> RunResult:
         """
         Comprueba que Notas Parciales acepta las credenciales. Solo lectura.
 
@@ -223,11 +223,39 @@ class Uploader:
         real, y la única que no necesita haber bajado nada de Moodle todavía:
         por eso sirve para avisar de una contraseña vencida al arrancar, y no a
         mitad de una sincronización (specs/003, A-14).
+
+        ``probe`` **exige** ``--cu`` y ``--grupo`` aunque el ingreso no dependa
+        de ellos. Sin pasarlos, el script muere en su propio analizador de
+        argumentos antes de tocar la red, y entonces esto informaría de un
+        rechazo de credenciales que nunca ocurrió. Se le da un destino real del
+        curso; si el curso todavía no tiene ninguno declarado, se levanta un
+        error que lo dice así, en vez de inventar un destino y arriesgar que el
+        servidor conteste otra cosa.
         """
-        res = self._run(["probe", *self._context_args()])
+        destino = destination or (
+            self.course.destinations[0] if self.course.destinations else None
+        )
+        if destino is None:
+            raise UploaderError(
+                "Todavía no se puede comprobar el ingreso a Notas Parciales.",
+                remedio=(
+                    "Este curso aún no tiene grupos oficiales averiguados, y la "
+                    "comprobación necesita uno. Se van a averiguar solos en la "
+                    "primera revisión."
+                ),
+            )
+
+        res = self._run(
+            [
+                "probe",
+                *self._context_args(),
+                "--cu", destino.cu,
+                "--grupo", str(destino.grupo),
+            ]
+        )
         if not res.ok:
             raise UploaderError(
-                "Notas Parciales no aceptó tus datos.",
+                "No se pudo comprobar el ingreso a Notas Parciales.",
                 remedio=_pista_de_error(res.salida()),
             )
         return res
@@ -423,6 +451,31 @@ def leer_plan(plan_path: Path) -> list[dict[str, str]]:
     """Lee un ``plan.csv`` como filas ya limpias."""
     with plan_path.open("r", encoding="utf-8-sig", newline="") as f:
         return [{k: (v or "").strip() for k, v in fila.items()} for fila in csv.DictReader(f)]
+
+
+def parece_rechazo_de_credenciales(salida: str) -> bool:
+    """
+    ¿La salida del script dice que el servidor rechazó usuario o contraseña?
+
+    Se pregunta explícitamente porque la respuesta importa mucho: decirle a un
+    profesor que se le venció la contraseña cuando en realidad falló otra cosa
+    lo manda a cambiar una contraseña que servía, y con ella pierde el acceso a
+    los demás sistemas de la UNED.
+
+    Ante la duda, la respuesta es **no**: es preferible decir «no se pudo
+    comprobar» que acusar a una credencial que estaba bien.
+    """
+    bajo = (salida or "").lower()
+    return any(
+        marca in bajo
+        for marca in (
+            "faltan credenciales ntlm",
+            "http 401",
+            "401 client error",
+            "unauthorized",
+            "reautenticación ntlm requerida",
+        )
+    )
 
 
 def reja_verificada(tmp_dir: Path) -> bool:

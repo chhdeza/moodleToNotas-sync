@@ -78,6 +78,17 @@ _RE_ENLACE_CURSO = re.compile(
 
 _RE_ETIQUETA = re.compile(r"<[^>]+>")
 
+#: La clave de sesión que Moodle imprime en cada página de alguien conectado.
+#:
+#: Aparece como ``"sesskey":"abc123"`` dentro de la configuración de JavaScript,
+#: y también como campo oculto de cualquier formulario. Se buscan las dos
+#: formas porque cuál aparece depende del tema visual.
+_RE_SESSKEY = re.compile(r'"sesskey"\s*:\s*"([^"]+)"')
+_RE_SESSKEY_CAMPO = re.compile(r'name="sesskey"[^>]*value="([^"]+)"')
+
+#: El servicio con el que Moodle 4 arma su propia pantalla «Mis cursos».
+_SERVICIO_CURSOS = "core_course_get_enrolled_courses_by_timeline_classification"
+
 
 def _texto_plano(html: str) -> str:
     """El texto de un enlace, sin etiquetas ni espacios de más."""
@@ -239,15 +250,106 @@ class MoodleSession:
 
     def list_courses(self) -> list[MoodleCourse]:
         """
-        Los cursos que el profesor puede ver, según su página de inicio.
+        Los cursos que el profesor puede ver.
 
-        Se leen los enlaces a ``course/view.php?id=N``, que es lo único que
-        Moodle escribe igual con cualquier tema visual. La lista es una ayuda
-        para no tener que copiar el número de la barra del navegador: si
-        estuviera incompleta, el número se puede escribir a mano y el programa
-        funciona igual.
+        Se intenta primero por el **servicio interno** que usa la propia
+        pantalla «Mis cursos» de Moodle. Desde Moodle 4 esa pantalla se dibuja
+        con JavaScript: el HTML que llega no trae ningún curso, y por eso
+        raspar la página devuelve una lista vacía aunque el ingreso haya sido
+        correcto. Preguntándole al mismo servicio que consulta el navegador se
+        obtiene lo que el profesor ve en pantalla.
+
+        Si el servicio no está disponible —una versión más vieja, o cerrado por
+        configuración— se cae al raspado de enlaces, que sigue funcionando en
+        los temas clásicos.
+
+        La lista es una ayuda para no tener que copiar el número de la barra del
+        navegador. Si queda vacía, el asistente deja escribirlo a mano y todo
+        sigue funcionando igual.
         """
         self._require_login()
+        return self._cursos_por_servicio() or self._cursos_raspando()
+
+    def _sesskey(self) -> str:
+        """La clave de sesión, leída de la página de inicio."""
+        try:
+            r = self.session.get(f"{self.base_url}/my/", timeout=self.timeout)
+            r.raise_for_status()
+        except requests.RequestException:
+            return ""
+
+        for patron in (_RE_SESSKEY, _RE_SESSKEY_CAMPO):
+            m = patron.search(r.text)
+            if m:
+                return m.group(1)
+        return ""
+
+    def _cursos_por_servicio(self) -> list[MoodleCourse]:
+        """
+        Le pregunta a Moodle por sus cursos con la misma llamada que hace su web.
+
+        Nunca levanta: es una fuente entre dos, y que falle solo significa que
+        hay que probar la otra. Un asistente que se cae porque no pudo adivinar
+        una lista de cortesía sería peor que uno que la deja vacía.
+        """
+        sesskey = self._sesskey()
+        if not sesskey:
+            return []
+
+        peticion = [
+            {
+                "index": 0,
+                "methodname": _SERVICIO_CURSOS,
+                "args": {
+                    "offset": 0,
+                    "limit": 0,
+                    "classification": "all",
+                    "sort": "fullname",
+                },
+            }
+        ]
+        try:
+            r = self.session.post(
+                f"{self.base_url}/lib/ajax/service.php",
+                params={"sesskey": sesskey, "info": _SERVICIO_CURSOS},
+                json=peticion,
+                timeout=self.timeout,
+            )
+            r.raise_for_status()
+            respuesta = r.json()
+        except (requests.RequestException, ValueError):
+            return []
+
+        if not isinstance(respuesta, list) or not respuesta:
+            return []
+        primera = respuesta[0]
+        if not isinstance(primera, dict) or primera.get("error"):
+            return []
+
+        datos = primera.get("data") or {}
+        cursos = datos.get("courses") if isinstance(datos, dict) else None
+        if not isinstance(cursos, list):
+            return []
+
+        salida: list[MoodleCourse] = []
+        for c in cursos:
+            if not isinstance(c, dict):
+                continue
+            try:
+                cid = int(c["id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            nombre = _texto_plano(str(c.get("fullname") or c.get("shortname") or ""))
+            salida.append(MoodleCourse(id=cid, name=nombre or f"curso {cid}"))
+        return sorted(salida, key=lambda c: c.id)
+
+    def _cursos_raspando(self) -> list[MoodleCourse]:
+        """
+        Los cursos leídos de los enlaces de la página, para los temas clásicos.
+
+        Se leen los enlaces a ``course/view.php?id=N``, que es lo único que
+        Moodle escribe igual con cualquier tema visual cuando los imprime.
+        """
         vistos: dict[int, str] = {}
 
         for ruta in ("/my/courses.php", "/my/", "/"):

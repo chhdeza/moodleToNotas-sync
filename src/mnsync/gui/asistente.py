@@ -266,8 +266,8 @@ class PasoCredenciales(PasoBase):
         detalle = (
             f"Moodle aceptó tus datos y encontró {cuantos} curso(s)."
             if cuantos
-            else "Moodle aceptó tus datos. La lista de cursos no se pudo leer, "
-            "pero el número de curso se puede escribir a mano."
+            else "Moodle aceptó tus datos. La lista de cursos no se pudo leer; "
+            "en el paso siguiente vas a poder escribir el número de tu curso."
         )
         self.estado.setText("✓ " + detalle + guardadas)
 
@@ -345,17 +345,35 @@ class PasoGrupos(PasoBase):
             "los demás son estudiantes de otra persona."
         )
 
+        # Editable a propósito. Leer la lista de cursos depende de cómo arme
+        # Moodle su página de inicio, que cambia con la versión y con el tema
+        # visual; si un día no se puede leer, el asistente no puede quedarse sin
+        # salida. El número está a la vista en la barra del navegador
+        # (…/course/view.php?id=8067), así que escribirlo siempre es posible.
         self.cursos = QComboBox()
+        self.cursos.setEditable(True)
+        self.cursos.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.cursos.lineEdit().setPlaceholderText(
+            "elegí uno, o escribí el número del curso"
+        )
         self.cursos.currentIndexChanged.connect(self._cambio_de_curso)
+        self.cursos.lineEdit().editingFinished.connect(self._cambio_de_curso)
 
         self.lista = QListWidget()
         self.lista.itemChanged.connect(lambda _: self.completeChanged.emit())
+
+        ayuda = QLabel(
+            "Si tu curso no está en la lista, abrilo en Moodle y copiá el número "
+            "que sale en la dirección, después de «id=»."
+        )
+        ayuda.setWordWrap(True)
 
         form = QFormLayout()
         form.addRow("Curso:", self.cursos)
 
         caja = QVBoxLayout(self)
         caja.addLayout(form)
+        caja.addWidget(ayuda)
         caja.addWidget(QLabel("Grupos del curso:"))
         caja.addWidget(self.lista)
         caja.addWidget(self.estado)
@@ -372,14 +390,34 @@ class PasoGrupos(PasoBase):
             self._cambio_de_curso()
         else:
             self.estado.setText(
-                "No se pudo leer tu lista de cursos. Escribí el número a mano en "
-                "courses.yml, o volvé atrás y probá de nuevo."
+                "No se pudo leer tu lista de cursos, pero eso no detiene nada: "
+                "escribí acá arriba el número de tu curso y seguimos."
             )
+            self.cursos.setFocus()
+
+    def curso_elegido(self) -> MoodleCourse | None:
+        """
+        El curso que está seleccionado, sea de la lista o escrito a mano.
+
+        Un número escrito a mano vale tanto como uno elegido: lo que hace falta
+        es el identificador, y el nombre solo sirve para reconocerlo en pantalla
+        y para armar el apodo del curso.
+        """
+        curso = self.cursos.currentData()
+        if isinstance(curso, MoodleCourse):
+            return curso
+
+        texto = self.cursos.currentText().strip()
+        if texto.isdigit():
+            return MoodleCourse(id=int(texto), name=f"curso {texto}")
+        return None
 
     def _cambio_de_curso(self) -> None:
-        curso = self.cursos.currentData()
+        curso = self.curso_elegido()
         if curso is None or self.borrador.creds is None:
             return
+        if self.borrador.curso_moodle == curso and self.borrador.grupos_moodle:
+            return  # ya se bajaron sus grupos; no repetir la consulta
         self.borrador.curso_moodle = curso
         self.lista.clear()
         self.correr(
