@@ -1,8 +1,7 @@
 @echo off
 REM ====================================================================
 REM  mnsync - Instalador para Windows
-REM  Se puede ejecutar las veces que haga falta: no borra tu .env
-REM  ni tu courses.yml si ya existen.
+REM  Se puede ejecutar las veces que haga falta: no borra nada tuyo.
 REM ====================================================================
 setlocal
 cd /d "%~dp0"
@@ -13,7 +12,7 @@ echo   Instalando mnsync
 echo ======================================================================
 echo.
 
-echo [1/5] Buscando Python 3.10 o superior...
+echo [1/4] Buscando Python 3.10 o superior...
 python --version >nul 2>&1
 if errorlevel 1 (
     echo.
@@ -22,19 +21,33 @@ if errorlevel 1 (
     echo   Instalalo desde https://www.python.org/downloads/
     echo   IMPORTANTE: marca la casilla "Add Python to PATH".
     echo.
+    echo   Despues de instalarlo, cerra esta ventana y volve a
+    echo   hacer doble clic en instalar.bat
+    echo.
     pause
     exit /b 1
 )
 python --version
 
 echo.
-echo [2/5] Trayendo el script de Notas Parciales...
+echo [2/4] Trayendo el script de Notas Parciales...
 if not exist "vendor\grade-uploader\notasparciales_upload.py" (
+    git --version >nul 2>&1
+    if errorlevel 1 (
+        echo.
+        echo   ERROR: no se encontro git, y falta una pieza del programa.
+        echo.
+        echo   Instalalo desde https://git-scm.com/download/win
+        echo   Despues volve a hacer doble clic en instalar.bat
+        echo.
+        pause
+        exit /b 1
+    )
     git submodule update --init --recursive
     if errorlevel 1 (
         echo.
-        echo   ERROR: no se pudo traer el submodulo.
-        echo   Revisa que tengas conexion a internet y que git este instalado.
+        echo   ERROR: no se pudo traer esa pieza.
+        echo   Revisa que tengas conexion a internet.
         echo.
         pause
         exit /b 1
@@ -43,52 +56,44 @@ if not exist "vendor\grade-uploader\notasparciales_upload.py" (
 echo   Listo.
 
 echo.
-echo [3/5] Creando el entorno virtual...
+echo [3/4] Creando el entorno...
 if not exist ".venv" python -m venv .venv
 echo   Listo.
 
 echo.
-echo [4/5] Instalando...
+echo [4/4] Instalando el programa y su ventana...
 .venv\Scripts\python.exe -m pip install --quiet --upgrade pip
-.venv\Scripts\python.exe -m pip install --quiet -e .
+.venv\Scripts\python.exe -m pip install --quiet -e ".[gui]"
 if errorlevel 1 (
     echo.
     echo   ERROR: no se pudieron instalar las dependencias.
     echo   Reintentando para mostrar el error real...
     echo.
-    .venv\Scripts\python.exe -m pip install -e .
+    .venv\Scripts\python.exe -m pip install -e ".[gui]"
     pause
     exit /b 1
 )
 echo   Listo.
 
-echo.
-echo [5/5] Creando los archivos de configuracion...
-if not exist ".env" (
-    copy /y ".env.example" ".env" >nul
-    echo   Se creo .env  ^(hay que completarlo^)
-) else (
-    echo   .env ya existia: no se toco.
-)
-if not exist "courses.yml" (
-    copy /y "courses.example.yml" "courses.yml" >nul
-    echo   Se creo courses.yml  ^(hay que editarlo^)
-) else (
-    echo   courses.yml ya existia: no se toco.
-)
+REM  A proposito NO se crean .env ni courses.yml.
+REM
+REM  El asistente escribe courses.yml solo, y guarda las contrasenas en el
+REM  Administrador de credenciales de Windows. Copiar los archivos de ejemplo
+REM  dejaria valores de mentira que el programa tomaria por buenos: los datos
+REM  del .env le ganan a los del Administrador de credenciales, asi que un
+REM  .env de ejemplo taparia las credenciales de verdad y nada funcionaria,
+REM  sin decir por que.
 
 echo.
 echo ======================================================================
-echo   Instalacion terminada
+echo   Listo. Ya podes usarlo.
 echo ======================================================================
 echo.
 echo   SIGUIENTE PASO:
 echo.
-echo     1. Abri el archivo .env con el Bloc de notas y poné tus
-echo        usuarios y contrasenas.
+echo     Hace doble clic en   abrir.bat
 echo.
-echo     2. Ejecuta esto para comprobar que todo quedo bien:
-echo.
-echo        .venv\Scripts\mnsync.exe doctor
+echo   La primera vez te va a pedir tus dos contrasenas y los datos
+echo   de tu curso. Despues de eso, solo abris y sincronizas.
 echo.
 pause

@@ -40,6 +40,7 @@ FAKE_ENV = {
     "MOODLE_PASSWORD": "contrasena-de-prueba",
     "NP_NTLM_USER": "profesor.prueba",
     "NP_NTLM_PASSWORD": "contrasena-de-prueba",
+    "NP_TUTOR": "0000000000",
 }
 
 REAL_HOST = "produccion.uned.ac.cr"
@@ -63,6 +64,22 @@ def _fake_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(key, value)
     monkeypatch.delenv("NP_BASE_URL", raising=False)
     monkeypatch.delenv("MNSYNC_FENCE_WRITES", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _sin_almacen_de_credenciales(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Aísla las pruebas del Administrador de credenciales de la máquina.
+
+    Sin esto, cada carga de configuración leería el almacén real del
+    desarrollador. Es solo lectura, pero una prueba no tiene por qué mirar
+    ahí, y una que llegara a escribir dejaría basura en el sistema.
+
+    Las pruebas que sí ejercitan el almacén montan el suyo, falso.
+    """
+    from mnsync import credstore
+
+    monkeypatch.setattr(credstore, "_backend", lambda: None)
 
 
 @pytest.fixture(autouse=True)

@@ -16,13 +16,15 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import __version__
+from . import __version__, credstore
 from ._uploader_shim import vendor_script
 from .config import Config, Course, Credentials, load_config, load_credentials, missing_credentials
+from .discovery import verificar_contexto
 from .errors import MnsyncError
 from .moodle_export import MoodleSession
 from .report import write_report
 from .sync import fetch_groups, sync_course
+from .uploader import reja_verificada
 
 ANCHO = 70
 
@@ -63,6 +65,25 @@ def _grupos_pedidos(course: Course, args: argparse.Namespace):
     return [course.group_by_moodle_id(int(args.group))]
 
 
+def _origen_de_credenciales() -> str:
+    """
+    De dónde salieron las credenciales que se están usando.
+
+    Con tres orígenes posibles conviene decirlo: si alguien cambió la
+    contraseña en un lado y el programa la está tomando del otro, este renglón
+    es lo único que lo explica.
+    """
+    import os
+
+    if os.environ.get("MOODLE_PASSWORD"):
+        if Path(".env").exists():
+            return "del archivo .env o del entorno"
+        return "del entorno"
+    if credstore.leer(credstore.SERVICIO_MOODLE) is not None:
+        return "del Administrador de credenciales de Windows"
+    return "origen desconocido"
+
+
 # ---------------------------------------------------------------------------
 # doctor
 # ---------------------------------------------------------------------------
@@ -82,10 +103,16 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     creds = load_credentials(require=False)
     faltan = missing_credentials(creds)
     if faltan:
-        print(f" ✗ Faltan credenciales en el .env: {', '.join(faltan)}")
-        problemas.append("Copiá «.env.example» como «.env» y completá esos valores.")
+        print(f" ✗ Faltan credenciales: {', '.join(faltan)}")
+        if credstore.disponible():
+            problemas.append(
+                "Ejecutá «mnsync credenciales» para guardarlas en el sistema, "
+                "o copiá «.env.example» como «.env» y completá esos valores."
+            )
+        else:
+            problemas.append("Copiá «.env.example» como «.env» y completá esos valores.")
     else:
-        print(" ✓ Credenciales configuradas")
+        print(f" ✓ Credenciales configuradas ({_origen_de_credenciales()})")
         print(f"     · Moodle: {creds.moodle_username} en {creds.moodle_url}")
         print(f"     · Notas Parciales: {creds.np_user}")
     if not creds.np_is_real_server:
@@ -99,7 +126,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         for c in cfg.courses:
             print(f"     · {c.id}: curso Moodle {c.moodle_course_id}, {len(c.groups)} grupo(s)")
             for g in c.groups:
-                print(f"         - {g.label}: Moodle {g.moodle_group_id} → CU {g.cu}/grupo {g.grupo}")
+                print(f"         - grupo de Moodle {g.moodle_group_id}: {g.label}")
+            if c.destinations:
+                destinos = ", ".join(d.label for d in c.destinations)
+                print(f"         destinos en Notas Parciales: {destinos}")
+            else:
+                print("         destinos: se descubren solos la primera vez")
     except MnsyncError as e:
         print(f" ✗ {e.mensaje}")
         if e.remedio:
@@ -139,6 +171,157 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# credenciales
+# ---------------------------------------------------------------------------
+def cmd_credenciales(args: argparse.Namespace) -> int:
+    """
+    Guarda las contraseñas en el Administrador de credenciales de Windows.
+
+    Es la alternativa al archivo `.env`, y la que usa la aplicación de
+    escritorio: quedan cifradas contra la cuenta de Windows del profesor, en
+    vez de en un archivo de texto que cualquier carpeta sincronizada puede
+    llevarse a la nube.
+    """
+    import getpass
+
+    titulo("CREDENCIALES GUARDADAS EN EL SISTEMA")
+
+    if not credstore.disponible():
+        print(" ✗ Esta máquina no ofrece un almacén de credenciales.")
+        print()
+        print(" Usá el archivo «.env» en su lugar. Mirá «.env.example».")
+        return 1
+
+    if args.borrar:
+        for servicio in (credstore.SERVICIO_MOODLE, credstore.SERVICIO_NP):
+            credstore.borrar(servicio)
+        print(" ✓ Credenciales borradas del sistema.")
+        print()
+        print(" Si tenías un «.env», ese sigue como estaba: este comando no lo toca.")
+        return 0
+
+    if args.ver:
+        _mostrar_credenciales_guardadas()
+        return 0
+
+    print()
+    print(" Se piden dos veces: una para Moodle y otra para Notas Parciales.")
+    print(" Las contraseñas no se ven mientras se escriben, y no quedan en")
+    print(" ningún archivo.")
+    print()
+
+    try:
+        print(" ── Moodle ──")
+        usuario_moodle = input("   Usuario: ").strip()
+        clave_moodle = getpass.getpass("   Contraseña: ")
+        print()
+        print(" ── Notas Parciales ──")
+        print("   (el usuario va sin @uned.ac.cr)")
+        usuario_np = input("   Usuario: ").strip()
+        clave_np = getpass.getpass("   Contraseña: ")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        print(" Cancelado. No se guardó nada.")
+        return 130
+
+    faltan = not all([usuario_moodle, clave_moodle, usuario_np, clave_np])
+    if faltan:
+        raise MnsyncError(
+            "Quedó algún campo vacío, así que no se guardó nada.",
+            remedio="Volvé a ejecutar el comando y completá los cuatro valores.",
+        )
+
+    credstore.guardar(credstore.SERVICIO_MOODLE, usuario_moodle, clave_moodle)
+    credstore.guardar(credstore.SERVICIO_NP, usuario_np, clave_np)
+
+    print()
+    print(" ✓ Guardadas en el Administrador de credenciales de Windows.")
+    print("=" * ANCHO)
+
+    siguiente_paso(
+        [
+            "Comprobá que el sistema de la UNED las acepta:",
+            "",
+            "   mnsync doctor",
+        ]
+    )
+    return 0
+
+
+def _mostrar_credenciales_guardadas() -> None:
+    """Los usuarios guardados. **Nunca** las contraseñas."""
+    print()
+    for etiqueta, servicio in (
+        ("Moodle", credstore.SERVICIO_MOODLE),
+        ("Notas Parciales", credstore.SERVICIO_NP),
+    ):
+        cred = credstore.leer(servicio)
+        if cred is None:
+            print(f"   {etiqueta:<18} (nada guardado)")
+        else:
+            print(f"   {etiqueta:<18} {cred.username}")
+    print()
+    print(" Las contraseñas no se muestran nunca, ni siquiera a vos.")
+    print("=" * ANCHO)
+
+
+# ---------------------------------------------------------------------------
+# cursos
+# ---------------------------------------------------------------------------
+def cmd_cursos(args: argparse.Namespace) -> int:
+    """
+    Los cursos que ves en Moodle, con su número.
+
+    Es para no tener que copiarlo de la barra del navegador. Si la lista sale
+    vacía o incompleta —depende del tema visual de Moodle— el número se puede
+    escribir a mano igual.
+    """
+    creds = load_credentials()
+
+    s = MoodleSession(creds.moodle_url)
+    s.login(creds.moodle_username, creds.moodle_password)
+    cursos = s.list_courses()
+
+    titulo("TUS CURSOS EN MOODLE")
+    print()
+    if not cursos:
+        print(" No se pudo leer la lista de cursos desde tu página de inicio.")
+        print()
+        print(" No es grave: abrí tu curso en Moodle y mirá la barra de direcciones.")
+        print(" El número que sigue a «id=» es el que va en «course_id».")
+        print()
+        print("   https://aprende.uned.ac.cr/course/view.php?id=8067")
+        print("                                                 ▲")
+        print("                                                 course_id")
+        return 0
+
+    configurados = _cursos_configurados(args)
+    for c in cursos:
+        marca = "✓ configurado" if c.id in configurados else ""
+        print(f"   {c.id:>8}  {c.name:<48} {marca}")
+    print("=" * ANCHO)
+
+    siguiente_paso(
+        [
+            "Poné el número del tuyo en courses.yml, como «course_id»,",
+            "y después mirá qué grupos tiene:",
+            "",
+            "   mnsync groups --course <tu-curso>",
+        ]
+    )
+    return 0
+
+
+def _cursos_configurados(args: argparse.Namespace) -> set[int]:
+    """Los course_id que ya están en courses.yml, si el archivo existe."""
+    try:
+        cfg = load_config(Path(args.config) if args.config else None)
+    except MnsyncError:
+        return set()
+    return {c.moodle_course_id for c in cfg.courses}
+
+
+# ---------------------------------------------------------------------------
 # groups
 # ---------------------------------------------------------------------------
 def cmd_groups(args: argparse.Namespace) -> int:
@@ -165,15 +348,16 @@ def cmd_groups(args: argparse.Namespace) -> int:
     print()
     print(" Los que dan «✓ configurado» ya están en courses.yml.")
     print()
-    print(" Para agregar uno, copiá esto bajo «groups:» de tu curso y completá")
-    print(" el CU y el grupo que le corresponden en Notas Parciales:")
+    print(" Para agregar uno, copiá esto bajo «moodle: groups:» de tu curso:")
     print()
     faltantes = [g for g in grupos if g.id not in configurados]
     ejemplo = faltantes[0] if faltantes else grupos[0]
-    print(f"      - moodle_group_id: {ejemplo.id}")
-    print(f'        name: "{ejemplo.name}"')
-    print('        cu: "42"        # ← el centro universitario')
-    print("        grupo: 1        # ← el número de grupo")
+    print(f"        - id: {ejemplo.id}")
+    print(f'          name: "{ejemplo.name}"')
+    print()
+    print(" No hace falta indicar centro universitario ni grupo de Notas")
+    print(" Parciales: un grupo de Moodle reúne estudiantes de varios centros,")
+    print(" y el programa averigua solo a dónde va cada uno.")
     print("=" * ANCHO)
 
     siguiente_paso(
@@ -208,6 +392,94 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     siguiente_paso(
         [
             "Abrí esos archivos en Excel si querés revisarlos. Después:",
+            "",
+            f"   mnsync plan --course {course.id}",
+        ]
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# destinos
+# ---------------------------------------------------------------------------
+def cmd_destinos(args: argparse.Namespace) -> int:
+    """
+    Averigua a qué grupos de Notas Parciales van a parar tus estudiantes.
+
+    Es lo mismo que hace la primera sincronización, pero por separado y sin
+    escribir nada, para poder anotar el resultado en ``courses.yml`` y que las
+    corridas siguientes no tengan que volver a averiguarlo.
+    """
+    cfg, creds = _cargar(args)
+    course = cfg.course(args.course)
+    work = _work_dir(args)
+
+    titulo(f"GRUPOS DE NOTAS PARCIALES — {course.id}")
+    print()
+    print(" Bajando tus grupos de Moodle y preguntándole al sistema de la UNED")
+    print(" dónde está matriculado cada estudiante. Todo es de lectura: no se")
+    print(" escribe ni una nota.")
+    print()
+
+    check = verificar_contexto(course, creds, work, groups=_grupos_pedidos(course, args))
+
+    if not check.ok:
+        print(f" ✗ {check.mensaje}")
+        if check.remedio:
+            print()
+            print(f"   {check.remedio}")
+        return 1
+
+    print(f" ✓ {check.resumen}")
+    print()
+    print(f"   {'Grupo oficial':<28} {'Estudiantes'}")
+    print(f"   {'-' * 28} {'-' * 11}")
+    for cu in sorted(check.por_cu):
+        for d in check.por_cu[cu]:
+            cuantos = check.estudiantes_en.get(d.key, 0)
+            print(f"   CU {d.cu} · grupo {d.grupo:<16} {cuantos}")
+    print("=" * ANCHO)
+
+    repartidos = [cu for cu, ds in check.por_cu.items() if len(ds) > 1]
+    if repartidos:
+        print()
+        print(f" El centro universitario {', '.join(sorted(repartidos))} aparece en más de")
+        print(" un grupo. Es normal: no todos sus estudiantes están en el mismo.")
+
+    if check.sin_destino:
+        print()
+        print(f" ⚠ {len(check.sin_destino)} estudiante(s) no aparecen en ningún grupo")
+        print("   oficial. Sus notas no se van a subir:")
+        print()
+        for cedula, nombre, cu in check.sin_destino:
+            print(f"     {cedula:<14} {nombre or '(sin nombre)':<32} CU {cu}")
+        print()
+        print("   Suele significar que no quedaron matriculados en esta asignatura.")
+        print("   Consultalo con registro antes del cierre de actas.")
+
+    sin_emparejar = check.columnas_sin_emparejar
+    if sin_emparejar:
+        print()
+        print(" ⚠ Estas columnas de Moodle no se reconocieron y NO se van a subir:")
+        print()
+        for i in sin_emparejar:
+            print(f"     · {i.columna}")
+        print()
+        print("   Indicá a mano cuál instrumento les corresponde, con «item_map»")
+        print("   en courses.yml. Mirá «courses.example.yml».")
+
+    print()
+    print(" Para que las próximas corridas no tengan que volver a averiguarlo,")
+    print(" copiá esto en courses.yml, dentro de tu curso:")
+    print()
+    print("    destinos:")
+    for d in check.destinos:
+        print(f'      - cu: "{d.cu}"')
+        print(f"        grupo: {d.grupo}")
+
+    siguiente_paso(
+        [
+            "Ahora mirá qué se subiría, sin escribir nada:",
             "",
             f"   mnsync plan --course {course.id}",
         ]
@@ -313,7 +585,7 @@ def cmd_rehearse(args: argparse.Namespace) -> int:
     print()
 
     # La reja se verifica a sí misma antes de tocar nada.
-    if not _fence_funciona(diario.parent):
+    if not reja_verificada(diario.parent):
         print(" ✗ No se pudo confirmar que la reja de escritura quedó instalada.")
         print()
         print("   El ensayo NO continúa. Una reja que no puede demostrar que")
@@ -336,6 +608,26 @@ def cmd_rehearse(args: argparse.Namespace) -> int:
     print()
     interceptadas = _contar_lineas(diario)
     print(f" Escrituras interceptadas: {interceptadas}")
+
+    if not interceptadas:
+        # Sin escrituras no hay diario que leer, y mandar al profesor a buscar
+        # un archivo que no existe convierte un buen resultado en un susto.
+        print()
+        print(" No había nada pendiente: todas las notas ya estaban puestas en el")
+        print(" sistema. El ensayo recorrió el camino completo de escritura y no")
+        print(" encontró nada que escribir, que es exactamente lo que uno quiere")
+        print(" ver cuando ya sincronizó.")
+        print("=" * ANCHO)
+        siguiente_paso(
+            [
+                "No hace falta hacer nada más. Cuando pongás notas nuevas en",
+                "Moodle, volvé a empezar por:",
+                "",
+                f"   mnsync plan --course {course.id}",
+            ]
+        )
+        return 0
+
     print(f" Detalle: {diario}")
     print("=" * ANCHO)
 
@@ -348,37 +640,6 @@ def cmd_rehearse(args: argparse.Namespace) -> int:
         ]
     )
     return 0
-
-
-def _fence_funciona(tmp_dir: Path) -> bool:
-    """
-    Comprueba en un subproceso que la reja se instala y deja su marca.
-
-    Se ejercita el mecanismo de verdad —no se confía en que "debería andar"—
-    porque de esta comprobación depende que el ensayo no escriba.
-    """
-    import subprocess
-
-    codigo = (
-        "import os,sys;"
-        "sys.path.insert(0, r'" + str(Path(__file__).resolve().parents[1]) + "');"
-        "from mnsync._uploader_shim import install_write_fence, FENCE_SENTINEL_ENV;"
-        "from pathlib import Path;"
-        "install_write_fence(Path(r'" + str(tmp_dir / '.fence_check.jsonl') + "'));"
-        "import requests;"
-        "s=requests.Session();"
-        "r=s.post('http://127.0.0.1:9/x/actualizarNotas', data='{}');"
-        "print('SENTINEL=' + os.environ.get(FENCE_SENTINEL_ENV,''));"
-        "print('BLOCKED=' + str(r.status_code == 200))"
-    )
-    try:
-        p = subprocess.run(
-            [sys.executable, "-c", codigo], capture_output=True, text=True, timeout=60, check=False
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return False
-    salida = p.stdout or ""
-    return "SENTINEL=1" in salida and "BLOCKED=True" in salida
 
 
 def _contar_lineas(path: Path) -> int:
@@ -482,6 +743,17 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--offline", action="store_true", help="No probar la conexión")
     d.set_defaults(func=cmd_doctor)
 
+    cr = sub.add_parser(
+        "credenciales",
+        help="Guardar las contraseñas en el sistema, en vez de en un archivo",
+    )
+    cr.add_argument("--ver", action="store_true", help="Mostrar qué usuarios hay guardados")
+    cr.add_argument("--borrar", action="store_true", help="Borrar las credenciales guardadas")
+    cr.set_defaults(func=cmd_credenciales)
+
+    cu = sub.add_parser("cursos", help="Ver tus cursos de Moodle con su número")
+    cu.set_defaults(func=cmd_cursos)
+
     g = sub.add_parser("groups", help="Ver los grupos del curso en Moodle")
     g.add_argument("--course", required=True, help="id del curso en courses.yml")
     g.set_defaults(func=cmd_groups)
@@ -490,6 +762,14 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--course", required=True)
     f.add_argument("--group", help="Limitar a un grupo de Moodle")
     f.set_defaults(func=cmd_fetch)
+
+    de = sub.add_parser(
+        "destinos",
+        help="Ver a qué grupos de Notas Parciales van tus estudiantes",
+    )
+    de.add_argument("--course", required=True)
+    de.add_argument("--group", help="Limitar a un grupo de Moodle")
+    de.set_defaults(func=cmd_destinos)
 
     pl = sub.add_parser("plan", help="Ver qué se subiría, sin escribir nada")
     pl.add_argument("--course", required=True)

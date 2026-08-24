@@ -37,12 +37,23 @@ def escribir_courses_yml(
     max_changes: int = 40,
     allow_update: bool = False,
 ) -> Path:
-    """``grupos``: lista de (moodle_group_id, cu, grupo_np)."""
+    """
+    ``grupos``: lista de (moodle_group_id, cu, grupo_np).
+
+    Los grupos de Moodle y los destinos de Notas Parciales van en secciones
+    distintas, porque son cosas distintas: el grupo dice de quién son los
+    estudiantes, el destino dónde se escriben sus notas (specs/001, D-11).
+    """
     lineas = [
         "courses:",
         "  - id: curso-prueba",
         "    moodle:",
         f"      course_id: {CURSO_MOODLE}",
+        "      groups:",
+    ]
+    for gid, _cu, gnum in grupos:
+        lineas += [f"        - id: {gid}", f'          name: "Grupo {gnum}"']
+    lineas += [
         "    notas_parciales:",
         '      ano: "2026"',
         '      pac: "3"',
@@ -51,17 +62,11 @@ def escribir_courses_yml(
         '      escuela: "03"',
         "      catedra: 253",
         "      encargado: ARODRIGUEZP",
-        '      tutor: "0401780367"',
         "      modelo: 4",
-        "    groups:",
+        "    destinos:",
     ]
-    for gid, cu, gnum in grupos:
-        lineas += [
-            f"      - moodle_group_id: {gid}",
-            f'        name: "Grupo {gnum}"',
-            f'        cu: "{cu}"',
-            f"        grupo: {gnum}",
-        ]
+    for _gid, cu, gnum in grupos:
+        lineas += [f'      - cu: "{cu}"', f"        grupo: {gnum}"]
     lineas += [
         "    policy:",
         f"      allow_update: {'true' if allow_update else 'false'}",

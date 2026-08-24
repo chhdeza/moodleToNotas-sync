@@ -6,6 +6,10 @@
 
 ## 📑 Contenido
 
+**¿Te pasaron este programa para probarlo?** Andá directo a
+[Empezar en cinco pasos](#-empezar-en-cinco-pasos). No hace falta leer el resto.
+
+- [🏁 Empezar en cinco pasos](#-empezar-en-cinco-pasos)
 - [🔭 ¿Qué hace esto?](#-qué-hace-esto)
 - [📚 Conceptos en 2 minutos](#-conceptos-en-2-minutos)
 - [🛡️ ¿Puede dañar las notas de mis estudiantes?](#️-puede-dañar-las-notas-de-mis-estudiantes)
@@ -22,6 +26,122 @@
 - [❓ Preguntas frecuentes](#-preguntas-frecuentes)
 - [🩺 Solución de problemas](#-solución-de-problemas)
 - [🔒 Seguridad](#-seguridad)
+
+---
+
+## 🏁 Empezar en cinco pasos
+
+Esta guía es para usar el programa desde su **ventana**, sin escribir un solo
+comando y sin abrir ningún archivo de configuración. Es el camino recomendado.
+
+Todo lo que viene después de esta sección es material de referencia: la versión
+de línea de comandos, los detalles del funcionamiento interno y la
+automatización. **No hace falta leerlo para usar el programa.**
+
+> [!NOTE]
+> Los cinco pasos son de una sola vez. Después de eso, usarlo son dos clics.
+
+---
+
+### 1️⃣ Instalá Python
+
+Descargalo de **[python.org/downloads](https://www.python.org/downloads/)** y
+ejecutá el instalador.
+
+> [!IMPORTANT]
+> En la primera pantalla del instalador, marcá la casilla
+> **«Add Python to PATH»** antes de continuar. Es fácil de pasar por alto y es
+> lo que hace que todo lo demás funcione.
+
+Si además no tenés **Git**, instalalo de
+[git-scm.com/download/win](https://git-scm.com/download/win). Siguiente,
+siguiente, siguiente: no hay nada que configurar.
+
+### 2️⃣ Descargá el programa
+
+Abrí **PowerShell** (tecla Windows, escribí `powershell`, Enter) y pegá esto tal
+cual:
+
+```powershell
+cd $HOME\Documents
+git clone --recurse-submodules https://github.com/chhdeza/moodleToNotas-sync.git
+```
+
+Eso deja una carpeta llamada `moodleToNotas-sync` en tus Documentos.
+
+> [!TIP]
+> El `--recurse-submodules` **no es opcional**: sin él falta una pieza. Si ya
+> descargaste sin eso, el instalador del paso siguiente lo arregla solo.
+
+### 3️⃣ Instalalo
+
+Abrí esa carpeta y hacé **doble clic en `instalar.bat`**.
+
+Se va a abrir una ventana negra que trabaja unos minutos y termina diciendo
+*«Listo. Ya podés usarlo.»* Cerrala.
+
+Si en cambio dice que no encontró Python, es que en el paso 1 quedó sin marcar
+la casilla. Se arregla reinstalando Python y marcándola.
+
+### 4️⃣ Abrilo y configurá tu curso
+
+**Doble clic en `abrir.bat`.**
+
+La primera vez se abre un asistente de cinco pantallas:
+
+| Pantalla | Qué te pide | De dónde sacarlo |
+|---|---|---|
+| **Tus dos cuentas** | Usuario y contraseña de Moodle, y los del SSO de la UNED. Y tu cédula | Las que ya usás. La cédula suele completarse sola |
+| **Tus grupos** | Cuáles grupos del curso son tuyos | Vienen marcados los que llevan tu nombre. Revisalos |
+| **Los datos de tu curso** | Ocho códigos | De los menús de la pantalla **Captura de Notas** de Notas Parciales. Tenela abierta al lado |
+| **Adónde van tus notas** | Nada: te muestra el reparto | Revisá que los números cuadren con lo que sabés de tu curso |
+| **Tus columnas** | Nada: te muestra el emparejamiento | Revisá que cada tarea de Moodle haya encontrado su instrumento |
+
+Cuando termines, el programa guarda todo. **No vas a tener que volver a hacer
+esto** salvo que cambies de cuatrimestre o de asignatura.
+
+> [!NOTE]
+> Tus contraseñas quedan en el **Administrador de credenciales de Windows**, no
+> en un archivo. La pantalla de códigos tarda un poco: está bajando tus notas y
+> preguntándole al sistema de la UNED dónde está cada estudiante. No escribe
+> nada.
+
+### 5️⃣ Usalo
+
+De ahí en adelante, cada semana: **doble clic en `abrir.bat`**.
+
+Al abrirse ya comprobó tus contraseñas y ya bajó el plan. Vas a ver una tabla
+con una fila por estudiante y por tarea, y qué pasaría con cada una.
+
+| Botón | Qué hace |
+|---|---|
+| **Probar sin escribir nada** | Hace el proceso completo contra el sistema real, pero tapia la escritura. Sirve para ver qué pasaría sin que pase |
+| **Sincronizar** | Escribe de verdad. Pregunta antes |
+
+La columna **«Autorizo»** es la que importa. Si una nota **ya estaba puesta** en
+Notas Parciales y en Moodle dice otra cosa, el programa **no la cambia solo**:
+te pide permiso fila por fila. No hay ninguna casilla que las autorice todas
+juntas, y no la hay a propósito.
+
+> [!WARNING]
+> **Una nota escrita no se deshace desde este programa.** Si autorizás un cambio
+> equivocado, hay que corregirlo en Notas Parciales a mano, igual que si lo
+> hubieras digitado.
+
+---
+
+### Si algo sale mal
+
+| Lo que ves | Qué significa |
+|---|---|
+| *«parece que cambió tu contraseña»* | Cambió tu contraseña de ese sistema. Pulsá **«Configurar un curso…»** y ponela de nuevo |
+| *«no se pudo comprobar»* | No es tu contraseña. Debajo dice el motivo real |
+| *«No se pudo leer tu lista de cursos»* | No detiene nada: escribí el número del curso a mano. Está en la dirección de Moodle, después de `id=` |
+| *N estudiantes están en Moodle pero no en Notas Parciales* | Esas personas no quedaron matriculadas en la asignatura. Sus notas no se suben; el resto sí. Consultalo con registro |
+| Una ventana negra con un error | Copiala entera y mandásela a quien te pasó el programa |
+
+**Ante cualquier duda, no pulses «Sincronizar».** Nada de lo demás escribe: podés
+mirar, cerrar y preguntar sin haber tocado ninguna nota.
 
 ---
 
@@ -55,14 +175,15 @@ Este programa hace ese traslado por vos.
 
 ## 📚 Conceptos en 2 minutos
 
-No hace falta saber programar, pero sí conviene tener claras estas ocho ideas. Todo el resto del documento las usa.
+No hace falta saber programar, pero sí conviene tener claras estas nueve ideas. Todo el resto del documento las usa.
 
 | Concepto | En palabras simples |
 |---|---|
 | **Moodle vs. Notas Parciales** | *Dónde calificás* y *dónde queda el registro oficial*. Son dos sistemas que no se hablan entre sí, y hasta hoy el puente entre ellos eras vos. |
 | **Sincronizar** | Copiar de uno al otro **solo lo que falta**. Si una nota ya está bien puesta, no se toca. |
-| **Grupo** | Un curso en Moodle puede tener varios grupos; vos das uno o dos. Cada grupo tuyo va a un lugar **distinto** en Notas Parciales. |
-| **CU (Centro Universitario)** | El número entre paréntesis de la columna «Institución» de Moodle: `DESAMPARADOS (42)` → el CU es `42`. |
+| **Grupo de Moodle** | Un curso se reparte en grupos entre los profesores que lo dan; vos tenés uno o dos. Sirve para saber **de quién** son los estudiantes. |
+| **CU (Centro Universitario)** | El número entre paréntesis de la columna «Institución» de Moodle: `DESAMPARADOS (42)` → el CU es `42`. **Tu grupo mezcla estudiantes de muchos centros.** |
+| **Grupo de Notas Parciales** | Adonde va la nota. Es de **un solo** centro universitario, y un mismo centro puede tener varios. El programa averigua solo cuál le toca a cada estudiante. |
 | **Instrumento** | Cada casilla calificable del sistema oficial: `Tar1`, `Tar2`, `Proy1`. Tu «Tarea 1» de Moodle tiene que saber a cuál corresponde. |
 | **Cédula / Número de ID** | La llave que une a un estudiante entre los dos sistemas. Si en Moodle está vacía o mal escrita, ese estudiante no se puede sincronizar. |
 | **Escala 0–100 → 0–10** | Moodle usa 0 a 100; Notas Parciales usa 0 a 10. La conversión es automática: se divide entre 10. |
@@ -75,7 +196,7 @@ No hace falta saber programar, pero sí conviene tener claras estas ocho ideas. 
 
 Es la pregunta correcta, y merece una respuesta honesta antes que cualquier instrucción de instalación.
 
-**Hay seis protecciones, y ninguna se puede desactivar por accidente:**
+**Hay siete protecciones, y ninguna se puede desactivar por accidente:**
 
 | 🛡️ Protección | Qué impide |
 |---|---|
@@ -83,8 +204,9 @@ Es la pregunta correcta, y merece una respuesta honesta antes que cualquier inst
 | **Plan revisable** | Antes de escribir se genera un archivo que abrís en Excel y revisás con calma. |
 | **No sobrescribe** | Si una nota **ya está puesta** en el sistema, el programa no la toca: la reporta y sigue. Cambiarla requiere pedirlo explícitamente. |
 | **Justificación registrada** | Si autorizás un cambio, queda anotado en el sistema de la UNED con su código, como manda el procedimiento. |
-| **Freno de cantidad** | Si una corrida fuera a cambiar más notas de las esperadas, se detiene y te avisa en vez de escribir. |
-| **Verificación de grupo** | Si Moodle no aplicara bien el filtro de grupo, el programa se detiene antes de bajar nada, para no tocar estudiantes ajenos. |
+| **Freno de cantidad** | Si una corrida fuera a cambiar más notas de las esperadas en un mismo grupo, se detiene y te avisa en vez de escribir. |
+| **Verificación de grupo** | Si Moodle no aplicara bien el filtro de grupo, el programa se detiene antes de bajar nada, para no tocar estudiantes de otros profesores. |
+| **Nadie se pierde en silencio** | Si un estudiante no aparece en ningún grupo oficial, se lo nombra en el reporte. Nunca se le adivina un lugar. |
 
 **Y esto es lo que NO puede hacer por vos:**
 
@@ -111,6 +233,12 @@ Es la pregunta correcta, y merece una respuesta honesta antes que cualquier inst
 ---
 
 ## 🚀 Instalación
+
+> [!NOTE]
+> Si venís de [Empezar en cinco pasos](#-empezar-en-cinco-pasos), **ya está todo
+> instalado**. Esta sección y las tres de configuración que siguen son para usar
+> el programa desde la **línea de comandos**, que es lo que necesita la
+> automatización semanal. Para el uso normal desde la ventana no hacen falta.
 
 ### Opción A — Instalador automático (Windows)
 
@@ -141,7 +269,6 @@ python -m venv .venv
 
 copy .env.example .env                     # Windows
 # cp .env.example .env                     # macOS / Linux
-copy courses.example.yml courses.yml
 ```
 
 > [!TIP]
@@ -157,9 +284,31 @@ copy courses.example.yml courses.yml
 
 ## 🔑 Configuración 1: tus credenciales
 
-Todo va en un archivo llamado **`.env`**. Ese archivo **nunca** se sube a Git: ya está protegido.
+Son cuatro contraseñas y usuarios, de **dos cuentas distintas**: la de Moodle y la del SSO de la UNED. Hay dos maneras de guardarlos.
 
-Son **cinco valores**, de **dos cuentas distintas**:
+### Opción A — En Windows, guardadas por el sistema *(recomendada)*
+
+```bash
+mnsync credenciales
+```
+
+Te pide los dos usuarios y las dos contraseñas, y las guarda en el **Administrador de credenciales de Windows**, cifradas contra tu cuenta de Windows. No queda ningún archivo con la contraseña adentro.
+
+Para ver qué hay guardado (usuarios sí, contraseñas nunca) o para borrarlo:
+
+```bash
+mnsync credenciales --ver
+mnsync credenciales --borrar
+```
+
+> [!NOTE]
+> **Qué protege esto y qué no.** Protege de otra persona que use la misma computadora, de que alguien copie el archivo, y —sobre todo— de que una carpeta sincronizada se lleve tus contraseñas a OneDrive sin que te enteres.
+>
+> No protege de un programa malicioso corriendo con tu propio usuario de Windows: la aplicación tiene que poder leerlas, así que cualquier cosa con tu mismo permiso también puede. Preferimos decirlo a sugerir una seguridad que no existe.
+
+### Opción B — Un archivo `.env`
+
+Es la vía de siempre, y la única en macOS y Linux. El archivo **nunca** se sube a Git: ya está protegido.
 
 ```ini
 # ─── Moodle ──────────────────────────────────────
@@ -176,7 +325,12 @@ NP_NTLM_PASSWORD=tu_contraseña_del_sso
 > En `NP_NTLM_USER` va **solo el nombre de usuario**, sin `@uned.ac.cr`.
 > Si tu correo es `jperez@uned.ac.cr`, poné `jperez`.
 
-Comprobá que quedó bien:
+> [!TIP]
+> `MOODLE_URL` se puede omitir: si no está, se usa `https://aprende.uned.ac.cr`. `mnsync doctor` siempre muestra cuál quedó en uso.
+
+### Si usás las dos
+
+Manda el `.env`. Y si además hay variables de entorno puestas —como en la automatización de GitHub— esas mandan sobre todo lo demás. `mnsync doctor` te dice de dónde salieron las que está usando:
 
 ```bash
 mnsync doctor
@@ -213,17 +367,21 @@ Son exactamente los menús desplegables que ya usás en la página de Captura de
 │  Escuela: [03 ▼]         ← escuela: "03"                        │
 │  Cátedra: [253 ▼]        ← catedra: 253                         │
 │  Encargado: [ARODRIG… ▼] ← encargado: ARODRIGUEZP               │
-│  Tutor: [0401780367 ▼]   ← tutor: "0401780367"                  │
+│  Tutor: [9999999999 ▼]   ← tutor: "9999999999"                  │
 │                                                                  │
 │  Asignatura: [00883 ▼]   ← asignatura: "00883"                  │
-│  Centro Univ: [42 ▼]     ← cu: "42"       (va en cada grupo)    │
-│  Grupo: [1 ▼]            ← grupo: 1       (va en cada grupo)    │
 │  Modelo: [4 ▼]           ← modelo: 4                            │
+│                                                                  │
+│  Centro Univ: [42 ▼]     ← no hace falta anotarlo               │
+│  Grupo: [1 ▼]            ← no hace falta anotarlo               │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
 > [!TIP]
-> **Los números de grupo no los tenés que buscar.** Este comando te los muestra ya listos para copiar:
+> **El Centro Universitario y el Grupo no se anotan.** Tus estudiantes están repartidos en varios centros a la vez, y el programa averigua solo a cuál pertenece cada uno.
+
+> [!TIP]
+> **Los números de tus grupos de Moodle no los tenés que buscar.** Este comando te los muestra ya listos para copiar:
 > ```bash
 > mnsync groups --course <tu-curso>
 > ```
@@ -245,7 +403,14 @@ courses:
     moodle:
       course_id: 8067              # de la URL de Moodle
 
-    # Estos son iguales para todos tus grupos de este curso.
+      # LOS GRUPOS QUE DAS VOS, y solo esos.
+      groups:
+        - id: 38525                # de: mnsync groups
+          name: "Grupo 1"
+        - id: 38526
+          name: "Grupo 2"
+
+    # Estos son iguales para todo el curso.
     notas_parciales:
       ano: "2026"
       pac: "3"
@@ -254,68 +419,73 @@ courses:
       escuela: "03"
       catedra: 253
       encargado: ARODRIGUEZP
-      tutor: "0401780367"          # tu cédula
+      tutor: "9999999999"          # tu cédula
       modelo: 4
-
-    # UNA ENTRADA POR CADA GRUPO QUE DAS VOS.
-    groups:
-      - moodle_group_id: 38525     # de: mnsync groups
-        name: "Grupo 1 — Desamparados"
-        cu: "42"                   # Centro Universitario
-        grupo: 1                   # Número de grupo
-
-      - moodle_group_id: 38526
-        name: "Grupo 2 — San José"
-        cu: "01"
-        grupo: 2
 
     policy:
       allow_update: false          # ¿puede cambiar notas ya puestas?
       justificacion_codigo: 2005   # "Error de digitación"
-      max_changes: 40              # freno: más de esto, se detiene y avisa
+      max_changes: 40              # freno por grupo de Notas Parciales
 ```
+
+> [!NOTE]
+> **No se indica a qué grupo de Notas Parciales va cada cosa.** El programa lo averigua solo la primera vez. Si querés ahorrarte esa espera, podés anotarlo — mirá la sección `destinos` en [`courses.example.yml`](courses.example.yml).
 
 ---
 
 ## 👥 Sobre los grupos (leelo, es importante)
 
-De todas las cosas que se pueden configurar mal, esta es la única que **falla sin dar error**. Por eso tiene su propia sección.
+Los dos sistemas agrupan a los estudiantes de maneras distintas, y esa es la raíz de casi todo lo demás. Vale dos minutos entenderlo.
 
-### El problema
+### Cada sistema agrupa por algo diferente
 
-Un curso en Moodle puede tener muchos grupos. Vos das uno o dos. Y cada grupo tuyo corresponde a un **grupo distinto** en Notas Parciales, con su propio Centro Universitario y su propio número.
+| | Moodle | Notas Parciales |
+|---|---|---|
+| **Agrupa por** | Quién da la clase | De qué Centro Universitario es el estudiante |
+| **Un grupo tiene** | Estudiantes de muchos centros | Estudiantes de un solo centro |
+| **Para qué sirve acá** | Saber **de quién** son los estudiantes | Saber **dónde** va cada nota |
+
+Tu grupo de Moodle es una mezcla: cuarenta estudiantes que pueden venir de diez centros universitarios distintos. En Notas Parciales, en cambio, cada uno va al grupo de **su** centro.
 
 ```mermaid
 flowchart LR
-    subgraph moodle ["📘 Moodle — un solo curso"]
-        M1["Grupo 1<br/>(id 38525)"]
-        M2["Grupo 2<br/>(id 38526)"]
-        M3["Grupo 3<br/>(de otro profesor)"]
+    subgraph moodle ["📘 Moodle — tus grupos"]
+        M1["Grupo 1<br/>40 estudiantes<br/>de varios centros"]
+        M2["Grupo 2<br/>38 estudiantes<br/>de varios centros"]
     end
+
+    P(["Todos tus<br/>estudiantes"])
 
     subgraph np ["🏛️ Notas Parciales"]
-        N1["CU 42<br/>grupo 1"]
-        N2["CU 01<br/>grupo 2"]
+        N1["CU 42 · grupo 1"]
+        N2["CU 42 · grupo 2"]
+        N3["CU 01 · grupo 1"]
+        N4["CU 09 · grupo 3"]
     end
 
-    M1 --> N1
-    M2 --> N2
-    M3 -.->|no es tuyo| X["🚫"]
+    M1 --> P
+    M2 --> P
+    P --> N1
+    P --> N2
+    P --> N3
+    P --> N4
 ```
 
-### Por qué hay que escribirlos a mano
+Fijate en algo: **el mismo centro (CU 42) aparece dos veces**, con grupos distintos. Pasa, y es normal — no todos los estudiantes de un centro están siempre en el mismo grupo.
 
-El programa **no adivina** a qué grupo oficial va cada grupo de Moodle, aunque técnicamente podría intentarlo.
+### Por qué no hay que anotar nada de esto
 
-La razón: cuando un profesor da **dos grupos en el mismo Centro Universitario**, adivinar acierta con uno y falla con el otro — y no lo dice. Las notas del segundo grupo simplemente no suben, sin ningún mensaje de error, y uno se entera semanas después.
+Porque no se puede saber de antemano, y porque el programa lo averigua mejor que uno: le pregunta al sistema de la UNED, estudiante por estudiante, en qué grupo oficial está cada uno. Son todas consultas de lectura, así que no toca nada.
 
-Escribir `cu` y `grupo` una sola vez, a mano, elimina ese riesgo para siempre.
+La primera corrida tarda un poco más por eso. Las siguientes ya van directo.
 
-### Cómo se ve cuando está mal
+### Si alguien no aparece
 
-Si te equivocaste, el plan se llena de **`skip_not_in_roster`** («no está en el grupo oficial»), o dicho de otra forma: *«no me aparecen mis estudiantes»*.
+Puede pasar que un estudiante esté en tu Moodle pero no en Notas Parciales. Es poco frecuente, y casi siempre significa que no quedó matriculado en la asignatura.
 
-Este programa lo trata como **error**, se detiene y te lo dice. No lo deja pasar callado.
+El programa **no se detiene por eso**: sube las notas de todos los demás y te deja el nombre de quien quedó afuera, arriba del reporte, para que lo consultes con registro.
+
+Ahora bien, si falla **un centro universitario entero** —ningún estudiante de ese centro aparece— eso ya no es matrícula: es que algún código de la asignatura está mal. Ahí sí se detiene y te avisa.
 
 ---
 
@@ -335,7 +505,7 @@ mnsync doctor
 mnsync groups --course redes-2026-3
 ```
 
-Copiá los que son tuyos a `courses.yml` y completá su `cu` y `grupo`.
+Copiá los que son tuyos a `courses.yml`, bajo `moodle: groups:`. Nada más: no hay que decir a qué centro universitario van.
 
 **3️⃣ Bajar las notas y revisarlas**
 
@@ -424,7 +594,7 @@ Al abrir el `notas_plan_*.csv` en Excel, la columna `accion` dice qué pasó con
 | `skip_already_set` | Ya está igual en el sistema | Nada. Ver **muchas** de estas es buena señal |
 | `mark_not_presented` | Se marcará como «no presentó» | Confirmá que de verdad no entregó |
 | `would_overwrite` | Cambiaría una nota **ya existente** | 🛑 **Revisá.** No se toca sin permiso explícito |
-| `skip_not_in_roster` | El estudiante no aparece en ese grupo oficial | 🛑 **Revisá** la cédula en Moodle **o** el grupo en `courses.yml` |
+| `skip_not_in_roster` | El estudiante es de **otro** grupo oficial | Nada: lo sube el plan del grupo que sí le toca |
 | `skip_retirado` | Estudiante con retiro justificado | Nada |
 | `review` | Caso raro; el programa prefiere no arriesgarse | 🛑 **Miralo con calma** |
 
@@ -482,7 +652,7 @@ Nada malo. La segunda vez encuentra todo puesto y no escribe nada: todas las fil
 <details>
 <summary><strong>¿Y si me equivoco en un número de la configuración?</strong></summary>
 
-En casi todos los casos el programa se detiene y te dice qué revisar. El caso más común —un `cu` o `grupo` equivocado— se detecta porque el plan se llena de `skip_not_in_roster`, y eso corta la corrida antes de escribir.
+En casi todos los casos el programa se detiene y te dice qué revisar. Los códigos de la asignatura (`asignatura`, `modelo`, `pac`, `ano`) son los más delicados, porque el sistema de la UNED **no da error** cuando están mal: devuelve listas vacías. El programa se da cuenta igual, porque entonces no aparece **ningún** estudiante de **ningún** centro universitario, y eso ya no puede ser casualidad. Corta la corrida antes de escribir.
 </details>
 
 <details>
@@ -496,7 +666,7 @@ Quien tenga acceso a tu computadora o a tu cuenta de GitHub podría llegar a ell
 <details>
 <summary><strong>¿Puede subir la nota equivocada a un estudiante?</strong></summary>
 
-Los estudiantes se emparejan por **cédula**, no por nombre ni por posición en una lista. Si la cédula de Moodle está bien, la nota va a quien corresponde. Si una cédula está mal o vacía, ese estudiante aparece como `skip_not_in_roster` y **no se le escribe nada**.
+Los estudiantes se emparejan por **cédula**, no por nombre ni por posición en una lista. Si la cédula de Moodle está bien, la nota va a quien corresponde. Si una cédula está mal o vacía, esa persona no aparece en ningún grupo oficial: **no se le escribe nada**, y su nombre queda listado arriba del reporte para que lo revises.
 </details>
 
 <details>

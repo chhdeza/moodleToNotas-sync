@@ -32,6 +32,15 @@ jobs:
         with:
           enable-cache: true
 
+      # Qt necesita librerias del sistema que la imagen de Ubuntu no trae.
+      # Sin ellas, PySide6 se instala pero no carga, y las pruebas de la
+      # ventana se saltarian en silencio: cincuenta pruebas que no corren se
+      # ven igual que cincuenta que pasan.
+      - name: Librerias del sistema para Qt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends             libegl1 libgl1 libxkbcommon0 libdbus-1-3 libglib2.0-0
+
       - name: Instalar desde el bloqueo
         run: uv sync --locked --all-extras
 
@@ -41,6 +50,8 @@ jobs:
       # Solo T0-T2. Las pruebas marcadas "rehearsal" tocan el servidor real
       # de la UNED y son un acto deliberado del profesor, nunca algo automatico.
       - name: Pruebas
+        env:
+          QT_QPA_PLATFORM: offscreen # sin pantalla: es un servidor
         run: uv run pytest -q -m "not rehearsal"
 
   # ── El camino que sigue un colega, tal cual lo documenta el README ─────

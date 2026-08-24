@@ -9,6 +9,7 @@ solo que la función exista.
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 
@@ -100,13 +101,15 @@ def test_la_reja_deja_su_marca(fence):
 
 def test_la_verificacion_de_la_reja_corre_de_verdad(tmp_path):
     """
-    ``_fence_funciona`` no confía en que "debería andar": lo ejecuta.
+    ``reja_verificada`` no confía en que "debería andar": lo ejecuta.
 
     Levanta un subproceso, instala la reja ahí e intenta una escritura real.
+    Vive en ``uploader`` y no en la línea de comandos porque la ventana ensaya
+    con la misma reja, y una segunda copia sería una que se puede quedar atrás.
     """
-    from mnsync.cli import _fence_funciona
+    from mnsync.uploader import reja_verificada
 
-    assert _fence_funciona(tmp_path) is True
+    assert reja_verificada(tmp_path) is True
 
 
 # ---------------------------------------------------------------------------
@@ -172,3 +175,44 @@ def test_leer_ensayo_archivo_inexistente_dice_donde_buscar(capsys):
 
     assert cli_main(["leer-ensayo", "no-existe.jsonl"]) == 1
     assert "rehearsal_*.jsonl" in capsys.readouterr().out
+
+
+def test_un_ensayo_sin_nada_pendiente_no_manda_a_buscar_un_archivo(tmp_path, capsys, monkeypatch):
+    """
+    Sin escrituras no hay diario, y no puede parecer que algo falló.
+
+    Es el resultado normal de un curso ya sincronizado: el ensayo recorre el
+    camino completo y no encuentra nada que escribir. Mandar al profesor a
+    abrir un archivo que no existe convierte ese buen resultado en un susto.
+    """
+    from mnsync import cli
+
+    class ReporteVacio:
+        hubo_errores = False
+        hubo_bloqueos = False
+
+        def to_console(self):
+            return "  (nada)"
+
+    monkeypatch.setattr(cli, "reja_verificada", lambda _: True)
+    monkeypatch.setattr(cli, "sync_course", lambda *a, **k: ReporteVacio())
+    monkeypatch.setattr(cli, "_cargar", lambda args: (_CfgFalsa(), object()))
+
+    args = argparse.Namespace(
+        course="curso-x", group=None, allow_update=False,
+        out=str(tmp_path / "salida"), config=None,
+    )
+    assert cli.cmd_rehearse(args) == 0
+
+    salida = capsys.readouterr().out
+    assert "Escrituras interceptadas: 0" in salida
+    assert "No había nada pendiente" in salida
+    assert ".jsonl" not in salida.split("Escrituras interceptadas")[1]
+
+
+class _CfgFalsa:
+    class _Curso:
+        id = "curso-x"
+
+    def course(self, _):
+        return self._Curso()

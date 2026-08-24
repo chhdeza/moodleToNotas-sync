@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 dependencies = [
+    "keyring>=24.0 ; sys_platform == 'win32'",
     "requests>=2.31",
     "requests-ntlm>=1.2",
     "python-dotenv>=1.0",
@@ -18,6 +19,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# La aplicación de escritorio. Es opcional a propósito: la línea de
+# comandos y el flujo automático no necesitan una interfaz gráfica, y
+# PySide6 pesa demasiado para imponérselo a un runner de CI.
+gui = [
+    "PySide6>=6.7",
+]
+
 dev = [
     "pytest>=8.0",
     "pytest-socket>=0.7",
@@ -27,6 +35,7 @@ dev = [
 
 [project.scripts]
 mnsync = "mnsync.cli:main"
+mnsync-app = "mnsync.gui.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

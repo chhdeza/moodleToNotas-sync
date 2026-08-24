@@ -51,6 +51,62 @@ COLUMNAS_NO_NOTA = frozenset(
     }
 )
 
+#: Columnas que Moodle **calcula** y agrega solas: el total del curso y los
+#: totales de categoría.
+#:
+#: No son instrumentos de evaluación y no tienen dónde subirse: Notas Parciales
+#: saca su propio promedio a partir de las notas que uno carga. Si se dejaran
+#: pasar, cada corrida terminaría con una advertencia por estudiante diciendo
+#: que esa columna no se pudo emparejar — y una advertencia que sale siempre y
+#: nunca significa nada enseña a no leer las advertencias.
+_RE_COLUMNA_CALCULADA = re.compile(
+    r"^\s*total\s+(del\s+curso|de\s+(la\s+)?categor[íi]a)\b",
+    re.IGNORECASE,
+)
+
+
+def es_columna_calculada(header: str) -> bool:
+    """¿Es una de las columnas que Moodle calcula solo (totales)?"""
+    return bool(_RE_COLUMNA_CALCULADA.match(header or ""))
+
+
+#: Enlaces a un curso, tal como los escribe Moodle con cualquier tema visual.
+_RE_ENLACE_CURSO = re.compile(
+    r'<a\b[^>]*href="[^"]*?/course/view\.php\?id=(?P<id>\d+)[^"]*"[^>]*>(?P<texto>.*?)</a>',
+    re.IGNORECASE | re.DOTALL,
+)
+
+_RE_ETIQUETA = re.compile(r"<[^>]+>")
+
+#: La clave de sesión que Moodle imprime en cada página de alguien conectado.
+#:
+#: Aparece como ``"sesskey":"abc123"`` dentro de la configuración de JavaScript,
+#: y también como campo oculto de cualquier formulario. Se buscan las dos
+#: formas porque cuál aparece depende del tema visual.
+_RE_SESSKEY = re.compile(r'"sesskey"\s*:\s*"([^"]+)"')
+_RE_SESSKEY_CAMPO = re.compile(r'name="sesskey"[^>]*value="([^"]+)"')
+
+#: El servicio con el que Moodle 4 arma su propia pantalla «Mis cursos».
+_SERVICIO_CURSOS = "core_course_get_enrolled_courses_by_timeline_classification"
+
+
+def _texto_plano(html: str) -> str:
+    """El texto de un enlace, sin etiquetas ni espacios de más."""
+    import html as _html
+
+    return re.sub(r"\s+", " ", _html.unescape(_RE_ETIQUETA.sub(" ", html))).strip()
+
+
+@dataclass
+class MoodleCourse:
+    """Un curso tal como lo ve Moodle."""
+
+    id: int
+    name: str
+
+    def __str__(self) -> str:
+        return f"{self.name} (id {self.id})"
+
 
 @dataclass
 class MoodleGroup:
@@ -76,6 +132,16 @@ class GradeExport:
     @property
     def cedulas(self) -> set[str]:
         return {r.get(COL_CEDULA, "").strip() for r in self.rows if r.get(COL_CEDULA, "").strip()}
+
+    @property
+    def instituciones(self) -> list[str]:
+        """
+        La columna «Institución» de cada fila, en el orden en que vino.
+
+        De ahí sale el centro universitario de cada estudiante, que es lo que
+        acota la búsqueda de su destino (specs/001, D-08).
+        """
+        return [r.get(COL_INSTITUCION, "").strip() for r in self.rows]
 
     def __len__(self) -> int:
         return len(self.rows)
@@ -181,6 +247,130 @@ class MoodleSession:
                 ),
             ) from e
         return r.text
+
+    def list_courses(self) -> list[MoodleCourse]:
+        """
+        Los cursos que el profesor puede ver.
+
+        Se intenta primero por el **servicio interno** que usa la propia
+        pantalla «Mis cursos» de Moodle. Desde Moodle 4 esa pantalla se dibuja
+        con JavaScript: el HTML que llega no trae ningún curso, y por eso
+        raspar la página devuelve una lista vacía aunque el ingreso haya sido
+        correcto. Preguntándole al mismo servicio que consulta el navegador se
+        obtiene lo que el profesor ve en pantalla.
+
+        Si el servicio no está disponible —una versión más vieja, o cerrado por
+        configuración— se cae al raspado de enlaces, que sigue funcionando en
+        los temas clásicos.
+
+        La lista es una ayuda para no tener que copiar el número de la barra del
+        navegador. Si queda vacía, el asistente deja escribirlo a mano y todo
+        sigue funcionando igual.
+        """
+        self._require_login()
+        return self._cursos_por_servicio() or self._cursos_raspando()
+
+    def _sesskey(self) -> str:
+        """La clave de sesión, leída de la página de inicio."""
+        try:
+            r = self.session.get(f"{self.base_url}/my/", timeout=self.timeout)
+            r.raise_for_status()
+        except requests.RequestException:
+            return ""
+
+        for patron in (_RE_SESSKEY, _RE_SESSKEY_CAMPO):
+            m = patron.search(r.text)
+            if m:
+                return m.group(1)
+        return ""
+
+    def _cursos_por_servicio(self) -> list[MoodleCourse]:
+        """
+        Le pregunta a Moodle por sus cursos con la misma llamada que hace su web.
+
+        Nunca levanta: es una fuente entre dos, y que falle solo significa que
+        hay que probar la otra. Un asistente que se cae porque no pudo adivinar
+        una lista de cortesía sería peor que uno que la deja vacía.
+        """
+        sesskey = self._sesskey()
+        if not sesskey:
+            return []
+
+        peticion = [
+            {
+                "index": 0,
+                "methodname": _SERVICIO_CURSOS,
+                "args": {
+                    "offset": 0,
+                    "limit": 0,
+                    "classification": "all",
+                    "sort": "fullname",
+                },
+            }
+        ]
+        try:
+            r = self.session.post(
+                f"{self.base_url}/lib/ajax/service.php",
+                params={"sesskey": sesskey, "info": _SERVICIO_CURSOS},
+                json=peticion,
+                timeout=self.timeout,
+            )
+            r.raise_for_status()
+            respuesta = r.json()
+        except (requests.RequestException, ValueError):
+            return []
+
+        if not isinstance(respuesta, list) or not respuesta:
+            return []
+        primera = respuesta[0]
+        if not isinstance(primera, dict) or primera.get("error"):
+            return []
+
+        datos = primera.get("data") or {}
+        cursos = datos.get("courses") if isinstance(datos, dict) else None
+        if not isinstance(cursos, list):
+            return []
+
+        salida: list[MoodleCourse] = []
+        for c in cursos:
+            if not isinstance(c, dict):
+                continue
+            try:
+                cid = int(c["id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            nombre = _texto_plano(str(c.get("fullname") or c.get("shortname") or ""))
+            salida.append(MoodleCourse(id=cid, name=nombre or f"curso {cid}"))
+        return sorted(salida, key=lambda c: c.id)
+
+    def _cursos_raspando(self) -> list[MoodleCourse]:
+        """
+        Los cursos leídos de los enlaces de la página, para los temas clásicos.
+
+        Se leen los enlaces a ``course/view.php?id=N``, que es lo único que
+        Moodle escribe igual con cualquier tema visual cuando los imprime.
+        """
+        vistos: dict[int, str] = {}
+
+        for ruta in ("/my/courses.php", "/my/", "/"):
+            try:
+                r = self.session.get(f"{self.base_url}{ruta}", timeout=self.timeout)
+                r.raise_for_status()
+            except requests.RequestException:
+                continue
+
+            for m in _RE_ENLACE_CURSO.finditer(r.text):
+                course_id = int(m.group("id"))
+                nombre = _texto_plano(m.group("texto"))
+                if nombre and (course_id not in vistos or not vistos[course_id]):
+                    vistos[course_id] = nombre
+                else:
+                    vistos.setdefault(course_id, nombre)
+
+            if vistos:
+                break
+
+        return [MoodleCourse(id=cid, name=nombre) for cid, nombre in sorted(vistos.items())]
 
     def list_groups(self, course_id: int) -> list[MoodleGroup]:
         """
@@ -367,7 +557,9 @@ def is_grade_column(header: str) -> bool:
     plan vacío sin explicar por qué.
     """
     h = header.strip()
-    return bool(h) and h not in COLUMNAS_IDENTIDAD and h not in COLUMNAS_NO_NOTA
+    if not h or h in COLUMNAS_IDENTIDAD or h in COLUMNAS_NO_NOTA:
+        return False
+    return not es_columna_calculada(h)
 
 
 def _assert_identity_columns(headers: list[str]) -> None:
@@ -386,12 +578,24 @@ def _assert_identity_columns(headers: list[str]) -> None:
     )
 
 
-def write_moodle_xlsx(export: GradeExport, path: Path) -> Path:
+def write_moodle_xlsx(
+    export: GradeExport, path: Path, *, conservar: set[str] | None = None
+) -> Path:
     """
     Escribe el .xlsx con la forma exacta que espera ``notasparciales_upload.py``.
 
     Ese script busca los encabezados «Nombre», «Apellido(s)», «Número de ID» e
     «Institución» tal cual, así que se preservan sin tocar.
+
+    Se escriben **solo** esas cuatro y las columnas de nota. Todo lo demás se
+    queda afuera, por dos razones: las columnas que Moodle calcula solo no
+    tienen dónde subirse y solo generan advertencias vacías, y el correo
+    electrónico de un estudiante no tiene por qué quedar en un archivo en el
+    disco de nadie.
+
+    ``conservar`` agrega columnas que igual hay que escribir: son las que el
+    profesor nombró a mano en ``item_map``, y si él dice que esa columna va a un
+    instrumento, va.
     """
     try:
         import openpyxl
@@ -405,8 +609,13 @@ def write_moodle_xlsx(export: GradeExport, path: Path) -> Path:
     ws = wb.active
     ws.title = "Calificaciones"
 
+    pedidas = conservar or set()
     columnas = [c for c in COLUMNAS_IDENTIDAD if c in export.headers]
-    columnas += [h for h in export.headers if h not in columnas]
+    columnas += [
+        h
+        for h in export.headers
+        if h not in columnas and (h in export.grade_headers or h in pedidas)
+    ]
 
     ws.append(columnas)
     for row in export.rows:

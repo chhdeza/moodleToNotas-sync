@@ -2,7 +2,8 @@
 # ║  courses.yml — qué cursos sincronizar y hacia dónde              ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
-# Este archivo NO lleva contraseñas: solo códigos de curso.
+# Este archivo NO lleva contraseñas ni cédulas: solo códigos.
+# Tu cédula (la del tutor) va en el .env, como NP_TUTOR.
 # Las credenciales van en el archivo .env, aparte.
 #
 # ¿No sabés qué poner en "groups"? Ejecutá:
@@ -19,7 +20,22 @@ courses:
       #   .../course/view.php?id=8067   →   course_id: 8067
       course_id: 8067
 
-    # Estos valores son los MISMOS para todos tus grupos de este curso.
+      # ─── LOS GRUPOS QUE DAS VOS ─────────────────────────────────
+      #
+      # Un curso de Moodle se reparte en grupos entre los varios
+      # profesores que dan la asignatura. Acá van los tuyos, y solo
+      # los tuyos: el resto son estudiantes de otros profesores.
+      #
+      # No hay que decir a qué centro universitario van. Un grupo
+      # tuyo reúne estudiantes de muchos centros a la vez, y el
+      # programa averigua solo a dónde corresponde cada uno.
+      groups:
+        - id: 38525
+          name: "Grupo 1"     # solo para los reportes
+        - id: 38526
+          name: "Grupo 2"
+
+    # Estos valores son los MISMOS para todo el curso.
     # Salen de los menús desplegables de la página de Captura de Notas.
     notas_parciales:
       ano: "2026"              # Año
@@ -29,28 +45,24 @@ courses:
       escuela: "03"            # Escuela
       catedra: 253             # Cátedra
       encargado: ARODRIGUEZP   # Usuario del encargado de cátedra
-      tutor: "0401780367"      # Tu cédula (la del tutor)
       modelo: 4                # Modelo de evaluación
 
-    # ─── UNA ENTRADA POR CADA GRUPO QUE DAS VOS ───────────────────
+    # ─── Opcional: los grupos de Notas Parciales ──────────────────
     #
-    # Un curso de Moodle puede tener muchos grupos, pero vos das uno
-    # o dos. Cada grupo de Moodle corresponde a UN grupo distinto en
-    # Notas Parciales.
+    # Si NO ponés esta sección, la primera corrida los averigua sola
+    # y tarda un poco más. Si la ponés, va directo.
     #
-    # "cu" y "grupo" son OBLIGATORIOS. El programa no los adivina: si
-    # los adivinara mal, las notas de un grupo se podrían perder en
-    # silencio. Mejor escribirlos una vez y estar seguros.
-    groups:
-      - moodle_group_id: 38525
-        name: "Grupo 1 — Desamparados"   # solo para los reportes
-        cu: "42"                         # Centro Universitario
-        grupo: 1                         # Número de grupo
-
-      - moodle_group_id: 38526
-        name: "Grupo 2 — San José"
-        cu: "01"
-        grupo: 2
+    # Fijate que un mismo centro universitario puede aparecer varias
+    # veces con grupos distintos: eso es normal. Los estudiantes de
+    # un centro no siempre están todos en el mismo grupo.
+    #
+    # destinos:
+    #   - cu: "42"       # Desamparados, grupo 1
+    #     grupo: 1
+    #   - cu: "42"       # Desamparados, grupo 2 — el MISMO centro
+    #     grupo: 2
+    #   - cu: "01"       # San José
+    #     grupo: 1
 
     # ─── Opcional: emparejar columnas a mano ──────────────────────
     # Normalmente el programa empareja solo la columna de Moodle con
@@ -71,7 +83,7 @@ courses:
       justificacion_codigo: 2005
 
       # Freno de seguridad: si una corrida fuera a cambiar MÁS de esta
-      # cantidad de notas en un grupo, se detiene y te avisa en vez de
-      # escribir. Protege contra un error grande hecho de un solo golpe.
-      # Poné 0 para quitar el freno.
+      # cantidad de notas EN UN MISMO grupo de Notas Parciales, se
+      # detiene y te avisa en vez de escribir. Protege contra un error
+      # grande hecho de un solo golpe. Poné 0 para quitar el freno.
       max_changes: 40

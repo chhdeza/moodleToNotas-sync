@@ -25,19 +25,33 @@ from .errors import ConfigError
 # falso local durante las pruebas mediante NP_BASE_URL.
 NP_BASE_URL_DEFAULT = "https://produccion.uned.ac.cr/notasparciales"
 
+# El Moodle de la UNED. Es una constante del programa, no algo que se deduzca
+# de datos del usuario: es la dirección a la que se le va a mandar una
+# contraseña, y adivinarla a partir de una entrada cualquiera sería regalarla.
+# `mnsync doctor` siempre muestra cuál quedó en uso.
+MOODLE_URL_DEFAULT = "https://aprende.uned.ac.cr"
+
 
 # ---------------------------------------------------------------------------
 # Credenciales
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class Credentials:
-    """Las 5 variables del .env. Nunca se registran en logs ni reportes."""
+    """
+    Quién es el profesor y con qué entra. Nunca se registra en logs ni reportes.
+
+    ``np_tutor`` es su cédula. No es un secreto —el sistema de la UNED la
+    muestra en un menú— pero sí es un dato personal, y vive acá y no en
+    ``courses.yml`` por eso: la configuración se comparte y se commitea, y lo
+    que entra al historial de git no sale nunca (specs/002, R-15).
+    """
 
     moodle_url: str
     moodle_username: str
     moodle_password: str
     np_user: str
     np_password: str
+    np_tutor: str = ""
     np_base_url: str = NP_BASE_URL_DEFAULT
 
     @property
@@ -52,13 +66,22 @@ class Credentials:
             f"Credentials(moodle_url={self.moodle_url!r}, "
             f"moodle_username={self.moodle_username!r}, moodle_password='***', "
             f"np_user={self.np_user!r}, np_password='***', "
+            f"np_tutor={self.np_tutor!r}, "
             f"np_base_url={self.np_base_url!r})"
         )
 
 
 def load_credentials(env_path: Path | None = None, *, require: bool = True) -> Credentials:
     """
-    Lee el ``.env`` (si existe) y arma las credenciales.
+    Arma las credenciales a partir de los tres orígenes posibles.
+
+    En este orden de precedencia, y por una razón en cada escalón:
+
+    1. **Variables de entorno.** Es como llegan los secretos en GitHub Actions,
+       y tienen que ganarle a cualquier cosa que haya en el disco del runner.
+    2. **El archivo ``.env``.** El camino de quien desarrolla.
+    3. **El Administrador de credenciales de Windows.** El de la aplicación de
+       escritorio, y el único de los tres que cifra en reposo.
 
     Con ``require=False`` no exige que estén completas: sirve para que
     ``mnsync doctor`` pueda decir *cuáles* faltan en vez de morir en la
@@ -79,12 +102,19 @@ def load_credentials(env_path: Path | None = None, *, require: bool = True) -> C
     def get(name: str) -> str:
         return (os.environ.get(name) or "").strip()
 
+    guardadas = _credenciales_guardadas()
+
+    def con_respaldo(name: str, respaldo: str) -> str:
+        """Lo del entorno, y si no hay, lo del almacén del sistema."""
+        return get(name) or respaldo
+
     creds = Credentials(
-        moodle_url=get("MOODLE_URL").rstrip("/"),
-        moodle_username=get("MOODLE_USERNAME"),
-        moodle_password=get("MOODLE_PASSWORD"),
-        np_user=get("NP_NTLM_USER"),
-        np_password=get("NP_NTLM_PASSWORD"),
+        moodle_url=(get("MOODLE_URL") or MOODLE_URL_DEFAULT).rstrip("/"),
+        moodle_username=con_respaldo("MOODLE_USERNAME", guardadas["moodle_username"]),
+        moodle_password=con_respaldo("MOODLE_PASSWORD", guardadas["moodle_password"]),
+        np_user=con_respaldo("NP_NTLM_USER", guardadas["np_user"]),
+        np_password=con_respaldo("NP_NTLM_PASSWORD", guardadas["np_password"]),
+        np_tutor=con_respaldo("NP_TUTOR", guardadas["np_tutor"]),
         np_base_url=(get("NP_BASE_URL") or NP_BASE_URL_DEFAULT).rstrip("/"),
     )
 
@@ -101,6 +131,26 @@ def load_credentials(env_path: Path | None = None, *, require: bool = True) -> C
     return creds
 
 
+def _credenciales_guardadas() -> dict[str, str]:
+    """
+    Lo que haya en el almacén del sistema, o cadenas vacías.
+
+    Se consulta una sola vez por carga y nunca levanta: si no hay almacén, las
+    credenciales vienen de los otros dos orígenes y nadie se entera.
+    """
+    from . import credstore
+
+    moodle = credstore.leer(credstore.SERVICIO_MOODLE)
+    np = credstore.leer(credstore.SERVICIO_NP)
+    return {
+        "moodle_username": moodle.username if moodle else "",
+        "moodle_password": moodle.password if moodle else "",
+        "np_user": np.username if np else "",
+        "np_password": np.password if np else "",
+        "np_tutor": credstore.leer_tutor(),
+    }
+
+
 def _credential_fields(creds: Credentials) -> list[tuple[str, str]]:
     """Pares (nombre de variable, valor) de lo que es obligatorio."""
     return [
@@ -109,6 +159,7 @@ def _credential_fields(creds: Credentials) -> list[tuple[str, str]]:
         ("MOODLE_PASSWORD", creds.moodle_password),
         ("NP_NTLM_USER", creds.np_user),
         ("NP_NTLM_PASSWORD", creds.np_password),
+        ("NP_TUTOR", creds.np_tutor),
     ]
 
 
@@ -121,28 +172,55 @@ def missing_credentials(creds: Credentials) -> list[str]:
 # courses.yml
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
-class Group:
+class MoodleGroupRef:
     """
-    Un grupo que da el profesor.
+    Un grupo de Moodle que imparte el profesor.
 
-    Es la unidad de sincronización: cada grupo se exporta, se planifica y se
-    sube por separado, para que el alcance de cada escritura sea demostrable.
+    Es un **ámbito de recolección**, no un destino: dice *de quién* son los
+    estudiantes que hay que bajar. Una vez recolectados, el grupo del que
+    vinieron no influye en dónde se escriben sus notas (specs/001, D-11).
     """
 
     moodle_group_id: int
-    cu: str
-    grupo: int
     name: str = ""
 
     @property
     def label(self) -> str:
         """Etiqueta legible para reportes."""
-        return self.name or f"CU {self.cu} / grupo {self.grupo}"
+        return self.name or f"grupo de Moodle {self.moodle_group_id}"
 
     @property
     def slug(self) -> str:
         """Fragmento seguro para nombres de archivo."""
-        return f"g{self.moodle_group_id}_cu{self.cu}_gr{self.grupo}"
+        return f"g{self.moodle_group_id}"
+
+
+@dataclass(frozen=True)
+class Destination:
+    """
+    Un destino en Notas Parciales: el par ``(cu, grupo)``.
+
+    Es la **unidad de escritura**. Un centro universitario puede tener varios
+    (specs/001, D-04), así que un CU por sí solo no identifica un destino.
+
+    No lleva cédulas ni ningún dato personal: qué estudiante va a qué destino se
+    resuelve contra el servidor en cada corrida y no se persiste (specs/002, R-15).
+    """
+
+    cu: str
+    grupo: int
+
+    @property
+    def label(self) -> str:
+        return f"CU {self.cu} / grupo {self.grupo}"
+
+    @property
+    def slug(self) -> str:
+        return f"cu{self.cu}_gr{self.grupo}"
+
+    @property
+    def key(self) -> tuple[str, int]:
+        return (self.cu, self.grupo)
 
 
 @dataclass(frozen=True)
@@ -168,23 +246,31 @@ class NotasParcialesCtx:
     escuela: str
     catedra: int
     encargado: str
-    tutor: str
     modelo: int
     tipo: str = "O"
 
 
 @dataclass(frozen=True)
 class Course:
-    """Un curso de Moodle y los grupos de él que da el profesor."""
+    """
+    Un curso de Moodle, los grupos que de él imparte el profesor, y los destinos
+    de Notas Parciales a los que van a parar sus estudiantes.
+
+    Las dos listas son independientes y de tamaños distintos: un grupo de Moodle
+    alimenta varios destinos, y un destino se alimenta de varios grupos
+    (specs/001, D-02 y D-11).
+    """
 
     id: str
     moodle_course_id: int
     np: NotasParcialesCtx
-    groups: tuple[Group, ...]
+    groups: tuple[MoodleGroupRef, ...]
+    #: Vacío significa «descubrirlos sondeando» (specs/002, R-05).
+    destinations: tuple[Destination, ...] = ()
     item_map: dict[str, str] = field(default_factory=dict)
     policy: Policy = field(default_factory=Policy)
 
-    def group_by_moodle_id(self, moodle_group_id: int) -> Group:
+    def group_by_moodle_id(self, moodle_group_id: int) -> MoodleGroupRef:
         for g in self.groups:
             if g.moodle_group_id == moodle_group_id:
                 return g
@@ -245,56 +331,68 @@ def _as_str(value: Any) -> str:
     return str(value).strip()
 
 
-def _parse_group(raw: Any, *, course_id: str, index: int) -> Group:
+def _parse_moodle_group(raw: Any, *, course_id: str, index: int) -> MoodleGroupRef:
+    """
+    Lee una entrada de ``moodle.groups``.
+
+    Se acepta tanto el número suelto como el bloque con «id» y «name»: el
+    asistente escribe la forma larga, pero a mano la corta es más cómoda.
+    """
     where = f"el grupo #{index + 1} del curso «{course_id}»"
+
+    if isinstance(raw, (int, str)) and not isinstance(raw, bool):
+        return MoodleGroupRef(moodle_group_id=_as_int(raw, "id", where))
+
     if not isinstance(raw, dict):
-        raise ConfigError(f"{where} debería ser una lista de campos, no «{raw!r}».")
+        raise ConfigError(f"{where} debería ser un número o un bloque con «id», no «{raw!r}».")
 
-    moodle_group_id = _as_int(_req(raw, "moodle_group_id", where), "moodle_group_id", where)
-    cu = _as_str(_req(raw, "cu", where))
-    grupo = _as_int(_req(raw, "grupo", where), "grupo", where)
-
-    return Group(
-        moodle_group_id=moodle_group_id,
-        cu=cu,
-        grupo=grupo,
+    return MoodleGroupRef(
+        moodle_group_id=_as_int(_req(raw, "id", where), "id", where),
         name=_as_str(raw.get("name") or ""),
     )
 
 
-def _validate_groups(groups: tuple[Group, ...], *, course_id: str) -> None:
-    """
-    Rechaza las dos formas de configurar grupos que fallan en silencio.
+def _parse_destination(raw: Any, *, course_id: str, index: int) -> Destination:
+    where = f"el destino #{index + 1} del curso «{course_id}»"
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{where} debería ser un bloque con «cu» y «grupo», no «{raw!r}».")
+    return Destination(
+        cu=_as_str(_req(raw, "cu", where)),
+        grupo=_as_int(_req(raw, "grupo", where), "grupo", where),
+    )
 
-    1. Dos grupos de Moodle apuntando al mismo (cu, grupo) de Notas Parciales:
-       el segundo sobrescribiría al primero sin avisar.
-    2. El mismo grupo de Moodle repetido: se subiría dos veces.
-    """
-    vistos_np: dict[tuple[str, int], Group] = {}
-    vistos_moodle: dict[int, Group] = {}
 
+def _validate_moodle_groups(groups: tuple[MoodleGroupRef, ...], *, course_id: str) -> None:
+    """Un grupo de Moodle repetido descargaría dos veces a los mismos estudiantes."""
+    vistos: set[int] = set()
     for g in groups:
-        clave_np = (g.cu, g.grupo)
-        if clave_np in vistos_np:
-            otro = vistos_np[clave_np]
-            raise ConfigError(
-                f"En el curso «{course_id}», los grupos de Moodle {otro.moodle_group_id} y "
-                f"{g.moodle_group_id} apuntan los dos al CU {g.cu} / grupo {g.grupo} "
-                "de Notas Parciales.",
-                remedio=(
-                    "Cada grupo de Moodle tiene que ir a un grupo distinto del sistema "
-                    "oficial. Revisá los valores de «cu» y «grupo» de ese curso."
-                ),
-            )
-        vistos_np[clave_np] = g
-
-        if g.moodle_group_id in vistos_moodle:
+        if g.moodle_group_id in vistos:
             raise ConfigError(
                 f"En el curso «{course_id}», el grupo de Moodle {g.moodle_group_id} "
                 "está configurado dos veces.",
                 remedio="Dejá una sola entrada por cada grupo de Moodle.",
             )
-        vistos_moodle[g.moodle_group_id] = g
+        vistos.add(g.moodle_group_id)
+
+
+def _validate_destinations(destinations: tuple[Destination, ...], *, course_id: str) -> None:
+    """
+    Un destino repetido significa escribir dos veces sobre el mismo grupo oficial.
+
+    Que un mismo CU aparezca con grupos distintos es normal y esperado
+    (specs/001, D-04); lo que no puede repetirse es el par completo.
+    """
+    vistos: set[tuple[str, int]] = set()
+    for d in destinations:
+        if d.key in vistos:
+            raise ConfigError(
+                f"En el curso «{course_id}», el destino {d.label} está configurado dos veces.",
+                remedio=(
+                    "Dejá una sola entrada por cada par de centro universitario y grupo. "
+                    "Que el mismo CU aparezca con grupos distintos sí es correcto."
+                ),
+            )
+        vistos.add(d.key)
 
 
 def _parse_course(raw: Any, index: int) -> Course:
@@ -322,22 +420,38 @@ def _parse_course(raw: Any, index: int) -> Course:
         escuela=_as_str(_req(np_raw, "escuela", np_where)),
         catedra=_as_int(_req(np_raw, "catedra", np_where), "catedra", np_where),
         encargado=_as_str(_req(np_raw, "encargado", np_where)),
-        tutor=_as_str(_req(np_raw, "tutor", np_where)),
         modelo=_as_int(_req(np_raw, "modelo", np_where), "modelo", np_where),
         tipo=_as_str(np_raw.get("tipo") or "O"),
     )
 
-    groups_raw = _req(raw, "groups", where)
-    if not isinstance(groups_raw, list) or not groups_raw:
+    # Los grupos del tutor viven bajo «moodle:», que es donde pertenecen.
+    #
+    # Se admite que la lista esté vacía, y a propósito: el comando que sirve
+    # para averiguar los números de grupo necesita poder leer el archivo antes
+    # de que estén escritos. Los comandos que sí los necesitan se quejan al
+    # usarlos, no acá.
+    groups_raw = moodle.get("groups") or []
+    if not isinstance(groups_raw, list):
         raise ConfigError(
-            f"{where} no tiene ningún grupo configurado.",
-            remedio=(
-                "Agregá al menos un grupo en «groups». Para ver los grupos "
-                f"disponibles ejecutá:  mnsync groups --course {course_id}"
-            ),
+            f"«moodle.groups» en {where} debería ser una lista de grupos.",
+            remedio="Mirá «courses.example.yml»: ahí está explicado campo por campo.",
         )
-    groups = tuple(_parse_group(g, course_id=course_id, index=i) for i, g in enumerate(groups_raw))
-    _validate_groups(groups, course_id=course_id)
+    groups = tuple(
+        _parse_moodle_group(g, course_id=course_id, index=i) for i, g in enumerate(groups_raw)
+    )
+    _validate_moodle_groups(groups, course_id=course_id)
+
+    # Los destinos son opcionales: si faltan, se descubren sondeando el servidor
+    # (specs/002, R-05). El asistente los escribe; a mano se pueden omitir.
+    destinos_raw = raw.get("destinos") or []
+    if not isinstance(destinos_raw, list):
+        raise ConfigError(
+            f"«destinos» en {where} debería ser una lista de bloques con «cu» y «grupo»."
+        )
+    destinations = tuple(
+        _parse_destination(d, course_id=course_id, index=i) for i, d in enumerate(destinos_raw)
+    )
+    _validate_destinations(destinations, course_id=course_id)
 
     pol_raw = raw.get("policy") or {}
     if not isinstance(pol_raw, dict):
@@ -367,6 +481,7 @@ def _parse_course(raw: Any, index: int) -> Course:
         moodle_course_id=moodle_course_id,
         np=np,
         groups=groups,
+        destinations=destinations,
         item_map=item_map,
         policy=policy,
     )
@@ -425,3 +540,87 @@ def load_config(path: Path | None = None) -> Config:
         vistos.add(c.id)
 
     return Config(courses=courses, source=p)
+
+
+# ---------------------------------------------------------------------------
+# Escritura
+# ---------------------------------------------------------------------------
+def course_to_dict(course: Course) -> dict[str, Any]:
+    """
+    Un curso, en la forma exacta que vuelve a leer ``load_config``.
+
+    Lo que **no** aparece acá es tan importante como lo que sí: ni credenciales,
+    ni la cédula del tutor, ni una sola cédula de estudiante. Este archivo se
+    comparte y se sube al repositorio para que el flujo automático lo use, y lo
+    que entra al historial de git no sale nunca (specs/002, R-15).
+
+    El enrutamiento individual no se guarda: se recalcula contra el servidor en
+    cada corrida. Solo se conserva la lista de destinos, que no es un dato
+    personal de nadie.
+    """
+    datos: dict[str, Any] = {
+        "id": course.id,
+        "moodle": {
+            "course_id": course.moodle_course_id,
+            "groups": [
+                {"id": g.moodle_group_id, **({"name": g.name} if g.name else {})}
+                for g in course.groups
+            ],
+        },
+        "notas_parciales": {
+            "ano": course.np.ano,
+            "pac": course.np.pac,
+            "tipo": course.np.tipo,
+            "asignatura": course.np.asignatura,
+            "escuela": course.np.escuela,
+            "catedra": course.np.catedra,
+            "encargado": course.np.encargado,
+            "modelo": course.np.modelo,
+        },
+    }
+    if course.destinations:
+        datos["destinos"] = [
+            {"cu": d.cu, "grupo": d.grupo} for d in course.destinations
+        ]
+    if course.item_map:
+        datos["item_map"] = dict(course.item_map)
+    datos["policy"] = {
+        "allow_update": course.policy.allow_update,
+        "justificacion_codigo": course.policy.justificacion_codigo,
+        "max_changes": course.policy.max_changes,
+    }
+    return datos
+
+
+def write_config(courses: tuple[Course, ...] | list[Course], path: Path) -> Path:
+    """
+    Escribe ``courses.yml``. Es lo que produce el asistente al terminar.
+
+    Se conserva el orden de los campos y se fuerzan las comillas en los códigos
+    que llevan ceros a la izquierda: si «01» se guardara como número, volvería
+    como «1» y el servidor devolvería tablas vacías sin dar ningún error.
+    """
+    try:
+        import yaml
+    except ImportError:  # pragma: no cover - dependencia declarada
+        raise ConfigError(
+            "Falta la librería PyYAML.",
+            remedio="Ejecutá:  pip install -e .",
+        ) from None
+
+    cuerpo = yaml.safe_dump(
+        {"courses": [course_to_dict(c) for c in courses]},
+        allow_unicode=True,
+        sort_keys=False,
+        default_flow_style=False,
+    )
+
+    encabezado = (
+        "# Generado por mnsync. Se puede editar a mano.\n"
+        "#\n"
+        "# NO lleva contraseñas, ni tu cédula, ni las de tus estudiantes:\n"
+        "# eso vive aparte, con las credenciales.\n\n"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(encabezado + cuerpo, encoding="utf-8")
+    return path

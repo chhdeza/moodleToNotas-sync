@@ -266,3 +266,105 @@ def test_write_moodle_xlsx_pone_los_encabezados_que_espera_el_uploader(tmp_path)
     # El guion de "sin calificar" se preserva tal cual: el planificador lo
     # interpreta como "no presento".
     assert "-" in [str(v) for v in filas[1]]
+
+
+# ---------------------------------------------------------------------------
+# Columnas que Moodle calcula solo
+# ---------------------------------------------------------------------------
+def test_el_total_del_curso_no_es_una_nota():
+    """
+    Moodle agrega «Total del curso» solo, y no es un instrumento.
+
+    Notas Parciales saca su propio promedio de las notas cargadas, así que esa
+    columna no tiene dónde subirse. Si se dejara pasar, cada corrida terminaría
+    con una advertencia por estudiante diciendo que no se pudo emparejar — y una
+    advertencia que sale siempre y nunca significa nada enseña a no leerlas.
+    """
+    from mnsync.moodle_export import es_columna_calculada, is_grade_column
+
+    for calculada in (
+        "Total del curso (Real)",
+        "Total del curso",
+        "Total de categoría (Real)",
+        "Total de la categoría (Real)",
+    ):
+        assert es_columna_calculada(calculada), calculada
+        assert not is_grade_column(calculada), calculada
+
+
+def test_una_tarea_de_verdad_sigue_siendo_una_nota():
+    """El filtro no puede llevarse por delante una columna calificable."""
+    from mnsync.moodle_export import is_grade_column
+
+    for real in (
+        "Tarea:Entrega de Actividad Tarea 1 (Real)",
+        "Proyecto (Real)",
+        "Total de puntos extra",  # empieza con «Total» pero no es un agregado
+    ):
+        assert is_grade_column(real), real
+
+
+def test_el_xlsx_no_lleva_correos_ni_totales(tmp_path):
+    """
+    Al script solo se le pasa lo que necesita: identidad y notas.
+
+    Además de quitar ruido, deja de escribir el correo de cada estudiante en un
+    archivo del disco, que no hacía falta para nada.
+    """
+    import openpyxl
+
+    from mnsync.moodle_export import GradeExport, write_moodle_xlsx
+
+    export = GradeExport(
+        headers=[
+            "Nombre", "Apellido(s)", "Número de ID", "Institución",
+            "Dirección de correo", "Tarea 1 (Real)", "Total del curso (Real)",
+        ],
+        rows=[
+            {
+                "Nombre": "ANA", "Apellido(s)": "SOLANO",
+                "Número de ID": "0100000001", "Institución": "DESAMPARADOS (42)",
+                "Dirección de correo": "ana@example.com",
+                "Tarea 1 (Real)": "80", "Total del curso (Real)": "80",
+            }
+        ],
+        group_id=1,
+        grade_headers=["Tarea 1 (Real)"],
+    )
+
+    ruta = write_moodle_xlsx(export, tmp_path / "x.xlsx")
+    wb = openpyxl.load_workbook(ruta, read_only=True)
+    encabezados = [str(c or "") for c in next(wb.active.iter_rows(values_only=True))]
+    wb.close()
+
+    assert encabezados == [
+        "Nombre", "Apellido(s)", "Número de ID", "Institución", "Tarea 1 (Real)",
+    ]
+
+
+def test_item_map_puede_rescatar_una_columna_excluida(tmp_path):
+    """
+    Si el profesor dice a mano que esa columna va a un instrumento, va.
+
+    El filtro es un valor por defecto sensato, no una decisión sobre la que él
+    no pueda mandar.
+    """
+    import openpyxl
+
+    from mnsync.moodle_export import GradeExport, write_moodle_xlsx
+
+    export = GradeExport(
+        headers=["Nombre", "Apellido(s)", "Número de ID", "Institución", "Total del curso (Real)"],
+        rows=[],
+        group_id=1,
+        grade_headers=[],
+    )
+
+    ruta = write_moodle_xlsx(
+        export, tmp_path / "x.xlsx", conservar={"Total del curso (Real)"}
+    )
+    wb = openpyxl.load_workbook(ruta, read_only=True)
+    encabezados = [str(c or "") for c in next(wb.active.iter_rows(values_only=True))]
+    wb.close()
+
+    assert "Total del curso (Real)" in encabezados

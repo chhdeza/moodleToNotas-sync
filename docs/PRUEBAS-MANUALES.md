@@ -2,7 +2,7 @@
 
 > **Objetivo:** validar que todo el sistema funciona de punta a punta **sin escribir una sola nota** en el sistema oficial de Notas Parciales.
 
-Las 67 pruebas automáticas ya cubren la lógica. Lo que **no** pueden cubrir es tu realidad concreta: que tu Moodle exporte las columnas correctas, que tus `moodle_group_id` existan, que tus códigos de curso apunten a un grupo real. Eso es lo que se valida acá.
+Las 87 pruebas automáticas ya cubren la lógica. Lo que **no** pueden cubrir es tu realidad concreta: que tu Moodle exporte las columnas correctas, que los números de tus grupos de Moodle existan, que tus códigos de curso apunten a un grupo real. Eso es lo que se valida acá.
 
 ---
 
@@ -298,7 +298,7 @@ Si cambió aunque sea una, **detené todo y avisá**. No debería poder ocurrir,
 Antes de siquiera considerar `--commit`:
 
 - [ ] **Fase 0:** las 5 pruebas de la reja pasan.
-- [ ] **Fase 1:** las 67 pruebas pasan, incluida `test_dry_run_dice_la_verdad`.
+- [ ] **Fase 1:** las 87 pruebas pasan, incluida `test_dry_run_dice_la_verdad`.
 - [ ] **Fase 2:** el xlsx tiene solo tu grupo, con cédulas reales.
 - [ ] **Fase 3:** el plan no tiene `skip_not_in_roster` de más.
 - [ ] **Fase 3:** el ensayo dijo `✓ Reja de escritura verificada`.
