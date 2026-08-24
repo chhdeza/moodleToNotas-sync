@@ -17,8 +17,15 @@ import os
 
 import pytest
 
-pytest.importorskip("PySide6", reason="la interfaz gráfica es opcional")
+# El plugin «offscreen» se elige ANTES de tocar Qt: una vez cargado, ya no se
+# puede cambiar, y sin él Qt busca una pantalla que en un servidor no existe.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+# Se comprueba «QtWidgets» y no «PySide6» a secas. El paquete de arriba importa
+# sin problema en cualquier lado; lo que puede faltar son las librerías del
+# sistema que Qt necesita por debajo (libEGL, por ejemplo), y eso solo se
+# descubre al cargar el módulo que de verdad las usa.
+pytest.importorskip("PySide6.QtWidgets", reason="la interfaz gráfica es opcional")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
