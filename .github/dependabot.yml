@@ -56,10 +56,20 @@ updates:
   # ─── El submódulo grade-uploader ───────────────────────────────────────
   # Avisa cuando el repositorio original avanza, para que el pin no se quede
   # atrás en silencio.
+  #
+  # Semanal, por el mismo motivo que las acciones, y con un caso real
+  # detrás: el submódulo quitó de sus ejemplos una cédula verdadera, y acá
+  # el puntero siguió señalando el commit anterior. Nada en el diff de este
+  # repositorio estaba mal —lo que dejó de ser cierto fue un hash— así que
+  # ninguna revisión lo iba a encontrar. Quien clonara mientras tanto se
+  # llevaba el dato personal igual.
+  #
+  # Un puntero viejo no es solo una versión atrasada: puede ser un arreglo
+  # que ya existe y que nadie está recibiendo.
   - package-ecosystem: gitsubmodule
     directory: "/"
     schedule:
-      interval: monthly
+      interval: weekly
     commit-message:
       prefix: "chore"
     labels:
