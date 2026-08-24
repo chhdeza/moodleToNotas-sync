@@ -6,12 +6,15 @@
 
 ## 📑 Contenido
 
+**¿Te pasaron este programa para probarlo?** Andá directo a
+[Empezar en cinco pasos](#-empezar-en-cinco-pasos). No hace falta leer el resto.
+
+- [🏁 Empezar en cinco pasos](#-empezar-en-cinco-pasos)
 - [🔭 ¿Qué hace esto?](#-qué-hace-esto)
 - [📚 Conceptos en 2 minutos](#-conceptos-en-2-minutos)
 - [🛡️ ¿Puede dañar las notas de mis estudiantes?](#️-puede-dañar-las-notas-de-mis-estudiantes)
 - [⚙️ Antes de empezar](#️-antes-de-empezar)
 - [🚀 Instalación](#-instalación)
-- [🖥️ La aplicación de escritorio](#️-la-aplicación-de-escritorio-en-pruebas)
 - [🔑 Configuración 1: tus credenciales](#-configuración-1-tus-credenciales)
 - [🔎 Configuración 2: encontrar los datos de tu curso](#-configuración-2-encontrar-los-datos-de-tu-curso)
 - [📝 Configuración 3: el archivo courses.yml](#-configuración-3-el-archivo-coursesyml)
@@ -23,6 +26,122 @@
 - [❓ Preguntas frecuentes](#-preguntas-frecuentes)
 - [🩺 Solución de problemas](#-solución-de-problemas)
 - [🔒 Seguridad](#-seguridad)
+
+---
+
+## 🏁 Empezar en cinco pasos
+
+Esta guía es para usar el programa desde su **ventana**, sin escribir un solo
+comando y sin abrir ningún archivo de configuración. Es el camino recomendado.
+
+Todo lo que viene después de esta sección es material de referencia: la versión
+de línea de comandos, los detalles del funcionamiento interno y la
+automatización. **No hace falta leerlo para usar el programa.**
+
+> [!NOTE]
+> Los cinco pasos son de una sola vez. Después de eso, usarlo son dos clics.
+
+---
+
+### 1️⃣ Instalá Python
+
+Descargalo de **[python.org/downloads](https://www.python.org/downloads/)** y
+ejecutá el instalador.
+
+> [!IMPORTANT]
+> En la primera pantalla del instalador, marcá la casilla
+> **«Add Python to PATH»** antes de continuar. Es fácil de pasar por alto y es
+> lo que hace que todo lo demás funcione.
+
+Si además no tenés **Git**, instalalo de
+[git-scm.com/download/win](https://git-scm.com/download/win). Siguiente,
+siguiente, siguiente: no hay nada que configurar.
+
+### 2️⃣ Descargá el programa
+
+Abrí **PowerShell** (tecla Windows, escribí `powershell`, Enter) y pegá esto tal
+cual:
+
+```powershell
+cd $HOME\Documents
+git clone --recurse-submodules https://github.com/chhdeza/moodleToNotas-sync.git
+```
+
+Eso deja una carpeta llamada `moodleToNotas-sync` en tus Documentos.
+
+> [!TIP]
+> El `--recurse-submodules` **no es opcional**: sin él falta una pieza. Si ya
+> descargaste sin eso, el instalador del paso siguiente lo arregla solo.
+
+### 3️⃣ Instalalo
+
+Abrí esa carpeta y hacé **doble clic en `instalar.bat`**.
+
+Se va a abrir una ventana negra que trabaja unos minutos y termina diciendo
+*«Listo. Ya podés usarlo.»* Cerrala.
+
+Si en cambio dice que no encontró Python, es que en el paso 1 quedó sin marcar
+la casilla. Se arregla reinstalando Python y marcándola.
+
+### 4️⃣ Abrilo y configurá tu curso
+
+**Doble clic en `abrir.bat`.**
+
+La primera vez se abre un asistente de cinco pantallas:
+
+| Pantalla | Qué te pide | De dónde sacarlo |
+|---|---|---|
+| **Tus dos cuentas** | Usuario y contraseña de Moodle, y los del SSO de la UNED. Y tu cédula | Las que ya usás. La cédula suele completarse sola |
+| **Tus grupos** | Cuáles grupos del curso son tuyos | Vienen marcados los que llevan tu nombre. Revisalos |
+| **Los datos de tu curso** | Ocho códigos | De los menús de la pantalla **Captura de Notas** de Notas Parciales. Tenela abierta al lado |
+| **Adónde van tus notas** | Nada: te muestra el reparto | Revisá que los números cuadren con lo que sabés de tu curso |
+| **Tus columnas** | Nada: te muestra el emparejamiento | Revisá que cada tarea de Moodle haya encontrado su instrumento |
+
+Cuando termines, el programa guarda todo. **No vas a tener que volver a hacer
+esto** salvo que cambies de cuatrimestre o de asignatura.
+
+> [!NOTE]
+> Tus contraseñas quedan en el **Administrador de credenciales de Windows**, no
+> en un archivo. La pantalla de códigos tarda un poco: está bajando tus notas y
+> preguntándole al sistema de la UNED dónde está cada estudiante. No escribe
+> nada.
+
+### 5️⃣ Usalo
+
+De ahí en adelante, cada semana: **doble clic en `abrir.bat`**.
+
+Al abrirse ya comprobó tus contraseñas y ya bajó el plan. Vas a ver una tabla
+con una fila por estudiante y por tarea, y qué pasaría con cada una.
+
+| Botón | Qué hace |
+|---|---|
+| **Probar sin escribir nada** | Hace el proceso completo contra el sistema real, pero tapia la escritura. Sirve para ver qué pasaría sin que pase |
+| **Sincronizar** | Escribe de verdad. Pregunta antes |
+
+La columna **«Autorizo»** es la que importa. Si una nota **ya estaba puesta** en
+Notas Parciales y en Moodle dice otra cosa, el programa **no la cambia solo**:
+te pide permiso fila por fila. No hay ninguna casilla que las autorice todas
+juntas, y no la hay a propósito.
+
+> [!WARNING]
+> **Una nota escrita no se deshace desde este programa.** Si autorizás un cambio
+> equivocado, hay que corregirlo en Notas Parciales a mano, igual que si lo
+> hubieras digitado.
+
+---
+
+### Si algo sale mal
+
+| Lo que ves | Qué significa |
+|---|---|
+| *«parece que cambió tu contraseña»* | Cambió tu contraseña de ese sistema. Pulsá **«Configurar un curso…»** y ponela de nuevo |
+| *«no se pudo comprobar»* | No es tu contraseña. Debajo dice el motivo real |
+| *«No se pudo leer tu lista de cursos»* | No detiene nada: escribí el número del curso a mano. Está en la dirección de Moodle, después de `id=` |
+| *N estudiantes están en Moodle pero no en Notas Parciales* | Esas personas no quedaron matriculadas en la asignatura. Sus notas no se suben; el resto sí. Consultalo con registro |
+| Una ventana negra con un error | Copiala entera y mandásela a quien te pasó el programa |
+
+**Ante cualquier duda, no pulses «Sincronizar».** Nada de lo demás escribe: podés
+mirar, cerrar y preguntar sin haber tocado ninguna nota.
 
 ---
 
@@ -115,6 +234,12 @@ Es la pregunta correcta, y merece una respuesta honesta antes que cualquier inst
 
 ## 🚀 Instalación
 
+> [!NOTE]
+> Si venís de [Empezar en cinco pasos](#-empezar-en-cinco-pasos), **ya está todo
+> instalado**. Esta sección y las tres de configuración que siguen son para usar
+> el programa desde la **línea de comandos**, que es lo que necesita la
+> automatización semanal. Para el uso normal desde la ventana no hacen falta.
+
 ### Opción A — Instalador automático (Windows)
 
 1️⃣ Descargá el proyecto:
@@ -144,7 +269,6 @@ python -m venv .venv
 
 copy .env.example .env                     # Windows
 # cp .env.example .env                     # macOS / Linux
-copy courses.example.yml courses.yml
 ```
 
 > [!TIP]
@@ -155,43 +279,6 @@ copy courses.example.yml courses.yml
 > ```bash
 > git submodule update --init --recursive
 > ```
-
----
-
-## 🖥️ La aplicación de escritorio *(en pruebas)*
-
-Todo lo que sigue en este README se puede hacer también desde una ventana, sin
-escribir un solo comando y sin abrir `courses.yml` nunca.
-
-```bash
-.venv\Scripts\pip.exe install -e ".[gui]"   # una sola vez, agrega la parte gráfica
-.venv\Scripts\mnsync-app.exe
-```
-
-La primera vez se abre un **asistente de cinco pasos**: tus dos contraseñas, tu
-curso y tus grupos de Moodle, los códigos de la pantalla de Captura de Notas, a
-qué grupos oficiales va a parar cada estudiante, y qué columna de Moodle
-corresponde a cada instrumento. Al terminar escribe `courses.yml` solo.
-
-Después de eso, cada semana se abre directo en la **pantalla de siempre**: al
-abrirse ya comprobó tus contraseñas y ya bajó el plan, así que solo queda mirar
-la lista y pulsar un botón.
-
-| En la ventana | Qué hace |
-|---|---|
-| **Probar sin escribir nada** | El proceso completo contra el sistema real, con la escritura tapiada |
-| **Sincronizar** | Escribe. Pregunta antes, y avisa que después no hay vuelta atrás desde acá |
-| La columna **Autorizo** | Cambiar una nota **ya puesta** se autoriza fila por fila. No hay ninguna casilla que las autorice todas juntas |
-
-> [!IMPORTANT]
-> **Está en pruebas.** Si algo se ve raro, la línea de comandos hace exactamente
-> lo mismo y está documentada abajo: las dos usan el mismo motor, las mismas
-> rejas de seguridad y producen el mismo reporte. La ventana no toma ninguna
-> decisión por su cuenta.
-
-> [!TIP]
-> El asistente escribe `courses.yml` encima del que haya. Si ya tenías uno hecho
-> a mano y querés comparar, guardá una copia antes.
 
 ---
 
@@ -280,7 +367,7 @@ Son exactamente los menús desplegables que ya usás en la página de Captura de
 │  Escuela: [03 ▼]         ← escuela: "03"                        │
 │  Cátedra: [253 ▼]        ← catedra: 253                         │
 │  Encargado: [ARODRIG… ▼] ← encargado: ARODRIGUEZP               │
-│  Tutor: [0401780367 ▼]   ← tutor: "0401780367"                  │
+│  Tutor: [9999999999 ▼]   ← tutor: "9999999999"                  │
 │                                                                  │
 │  Asignatura: [00883 ▼]   ← asignatura: "00883"                  │
 │  Modelo: [4 ▼]           ← modelo: 4                            │
@@ -332,7 +419,7 @@ courses:
       escuela: "03"
       catedra: 253
       encargado: ARODRIGUEZP
-      tutor: "0401780367"          # tu cédula
+      tutor: "9999999999"          # tu cédula
       modelo: 4
 
     policy:

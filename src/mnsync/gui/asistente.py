@@ -258,6 +258,10 @@ class PasoCredenciales(PasoBase):
                 self.np_usuario.text().strip(),
                 self.np_clave.text(),
             )
+            # La cédula también. Sin esto, el asistente prometía haber guardado
+            # todo y al día siguiente el programa pedía «Faltan credenciales:
+            # NP_TUTOR» — sin que nadie hubiera tocado nada.
+            credstore.guardar_tutor(self.tutor.text().strip())
             guardadas = "  Quedaron guardadas en este equipo."
         else:
             guardadas = ""

@@ -70,6 +70,34 @@ def _backend():
     return keyring
 
 
+def leer_tutor() -> str:
+    """
+    La cédula del tutor guardada, o cadena vacía.
+
+    No es una contraseña —viaja en cada consulta al servidor— pero sí es un dato
+    personal, y por eso vive acá y no en ``courses.yml``, que se comparte y se
+    sube al repositorio (specs/002, R-15).
+
+    Se guarda junto a la entrada de Notas Parciales porque es de ese sistema: si
+    alguien borra esas credenciales, la cédula se va con ellas.
+    """
+    keyring = _backend()
+    if keyring is None:
+        return ""
+    try:
+        return (keyring.get_password(SERVICIO_NP, _CLAVE_TUTOR) or "").strip()
+    except Exception:  # pragma: no cover - depende del sistema
+        return ""
+
+
+def guardar_tutor(cedula: str) -> None:
+    """Guarda (o reemplaza) la cédula del tutor."""
+    keyring = _backend()
+    if keyring is None:
+        raise CredStoreNoDisponible()
+    keyring.set_password(SERVICIO_NP, _CLAVE_TUTOR, cedula.strip())
+
+
 def leer(servicio: str) -> StoredCredential | None:
     """
     Devuelve la credencial guardada para un sistema, o ``None``.
@@ -124,6 +152,10 @@ def borrar(servicio: str) -> None:
         return
 
     usuarios = [_CLAVE_USUARIO]
+    if servicio == SERVICIO_NP:
+        # La cédula es de este sistema: borrar sus credenciales y dejarla ahí
+        # sería dejar un dato personal sin nada que lo justifique.
+        usuarios.append(_CLAVE_TUTOR)
     actual = leer(servicio)
     if actual is not None:
         # Primero el del usuario: si se borrara el índice antes, ya no habría
@@ -136,6 +168,10 @@ def borrar(servicio: str) -> None:
         except Exception:  # pragma: no cover - no había nada que borrar
             pass
 
+
+#: Registro donde vive la cédula del tutor, dentro del servicio de Notas
+#: Parciales. Los guiones bajos la separan de cualquier nombre de usuario real.
+_CLAVE_TUTOR = "__tutor__"
 
 #: Registro auxiliar que guarda el nombre de usuario, para poder recuperarlo
 #: en sistemas donde `get_credential` no lo devuelve solo.

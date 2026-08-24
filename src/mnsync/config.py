@@ -114,7 +114,7 @@ def load_credentials(env_path: Path | None = None, *, require: bool = True) -> C
         moodle_password=con_respaldo("MOODLE_PASSWORD", guardadas["moodle_password"]),
         np_user=con_respaldo("NP_NTLM_USER", guardadas["np_user"]),
         np_password=con_respaldo("NP_NTLM_PASSWORD", guardadas["np_password"]),
-        np_tutor=get("NP_TUTOR"),
+        np_tutor=con_respaldo("NP_TUTOR", guardadas["np_tutor"]),
         np_base_url=(get("NP_BASE_URL") or NP_BASE_URL_DEFAULT).rstrip("/"),
     )
 
@@ -147,6 +147,7 @@ def _credenciales_guardadas() -> dict[str, str]:
         "moodle_password": moodle.password if moodle else "",
         "np_user": np.username if np else "",
         "np_password": np.password if np else "",
+        "np_tutor": credstore.leer_tutor(),
     }
 
 

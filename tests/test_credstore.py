@@ -180,3 +180,78 @@ def test_la_contrasena_no_aparece_en_el_repr(almacen):
 
     assert "clave-secreta" not in texto
     assert "pperez" in texto
+
+
+# ---------------------------------------------------------------------------
+# La cédula del tutor
+# ---------------------------------------------------------------------------
+def test_la_cedula_del_tutor_se_guarda_y_se_recupera(almacen):
+    """
+    El asistente la pide una vez; el programa tiene que recordarla.
+
+    Sin esto el asistente decía «quedaron guardadas en este equipo» y al día
+    siguiente el programa pedía «Faltan credenciales: NP_TUTOR», sin que nadie
+    hubiera tocado nada. Una promesa que no se cumple al segundo arranque es
+    peor que no haberla hecho.
+    """
+    credstore.guardar_tutor("9999999999")
+    assert credstore.leer_tutor() == "9999999999"
+
+
+def test_sin_cedula_guardada_devuelve_vacio(almacen):
+    assert credstore.leer_tutor() == ""
+
+
+def test_la_cedula_se_guarda_sin_espacios(almacen):
+    credstore.guardar_tutor("  9999999999  ")
+    assert credstore.leer_tutor() == "9999999999"
+
+
+def test_borrar_notas_parciales_se_lleva_la_cedula(almacen):
+    """
+    Es un dato personal de ese sistema, no un ajuste suelto.
+
+    Quien borra sus credenciales de Notas Parciales espera que no quede nada
+    suyo; dejar la cédula ahí sería guardar un dato personal sin que ya haya
+    nada que lo justifique.
+    """
+    credstore.guardar(credstore.SERVICIO_NP, "profe", "clave")
+    credstore.guardar_tutor("9999999999")
+
+    credstore.borrar(credstore.SERVICIO_NP)
+
+    assert credstore.leer_tutor() == ""
+    assert credstore.leer(credstore.SERVICIO_NP) is None
+
+
+def test_borrar_moodle_no_toca_la_cedula(almacen):
+    """La cédula es de Notas Parciales; Moodle no tiene nada que ver."""
+    credstore.guardar_tutor("9999999999")
+    credstore.guardar(credstore.SERVICIO_MOODLE, "profe", "clave")
+
+    credstore.borrar(credstore.SERVICIO_MOODLE)
+
+    assert credstore.leer_tutor() == "9999999999"
+
+
+def test_las_credenciales_completas_salen_del_almacen(almacen, monkeypatch, tmp_path):
+    """
+    Un profesor que solo usó el asistente no tiene ningún .env.
+
+    Si la cédula no saliera del almacén, el programa le diría que le faltan
+    credenciales aunque acabara de configurarlo todo desde la ventana.
+    """
+    from mnsync.config import load_credentials, missing_credentials
+
+    for name in ("MOODLE_USERNAME", "MOODLE_PASSWORD", "NP_NTLM_USER",
+                 "NP_NTLM_PASSWORD", "NP_TUTOR"):
+        monkeypatch.delenv(name, raising=False)
+
+    credstore.guardar(credstore.SERVICIO_MOODLE, "profe", "clave-moodle")
+    credstore.guardar(credstore.SERVICIO_NP, "profe.np", "clave-np")
+    credstore.guardar_tutor("9999999999")
+
+    creds = load_credentials(tmp_path / "no-existe.env", require=False)
+
+    assert missing_credentials(creds) == []
+    assert creds.np_tutor == "9999999999"

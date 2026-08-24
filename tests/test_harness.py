@@ -41,7 +41,7 @@ def run_uploader(args, cwd, env_extra=None):
 CTX = [
     "--ano", "2026", "--pac", "3", "--tipo", "O",
     "--escuela", "03", "--catedra", "253",
-    "--encargado", "ARODRIGUEZP", "--tutor", "0401780367",
+    "--encargado", "ARODRIGUEZP", "--tutor", "9999999999",
     "--asignatura", "00883", "--modelo", "4",
 ]
 
