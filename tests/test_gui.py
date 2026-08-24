@@ -492,3 +492,147 @@ def test_elegir_de_la_lista_sigue_ganando(paso_grupos):
     elegido = paso_grupos.curso_elegido()
     assert elegido == curso
     assert elegido.name == "Introducción a la Ciberseguridad"
+
+
+# ---------------------------------------------------------------------------
+# Las notas se leen, no se descifran
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "crudo,esperado",
+    [
+        ("9.4", "9.4"),
+        ("998 (no presentó)", "no presentó"),
+        ("999 (vacío)", "sin nota"),
+        ("994", "retirado"),
+        ("-", "no presentó"),
+        ("", "—"),
+        ("  ", "—"),
+    ],
+)
+def test_los_marcadores_del_sistema_se_muestran_con_su_significado(crudo, esperado):
+    """
+    998, 999 y 994 no son notas: son códigos reservados.
+
+    Mostrarlos crudos junto a un 9,4 los hace parecer calificaciones altísimas,
+    y quien revisa la tabla antes de escribir necesita entenderla de un vistazo.
+    """
+    from mnsync.gui.ventana import nota_legible
+
+    assert nota_legible(crudo) == esperado
+
+
+def test_una_nota_de_verdad_no_se_toca():
+    """
+    Solo se traducen los códigos conocidos. Todo lo demás pasa tal cual.
+
+    Una nota es de quien la puso: este programa la traslada, no la reinterpreta
+    ni la redondea.
+    """
+    from mnsync.gui.ventana import nota_legible
+
+    for valor in ("10.0", "0", "7.55", "8,5"):
+        assert nota_legible(valor) == valor
+
+
+def test_la_tabla_usa_los_textos_legibles(ventana):
+    """Lo probado arriba tiene que ser lo que de verdad llega a la pantalla."""
+    fila = FilaPlan(
+        destino=DESTINO, cedula="001", nombre="ANA SOLANO",
+        instrumento="Tar1", instrumento_nombre="Tarea 1 (2)",
+        nota_local="-", nota_remota="998 (no presentó)",
+        accion="skip_already_set", motivo="",
+    )
+    _con_filas(ventana, [fila])
+
+    assert ventana.tabla.item(0, 4).text() == "no presentó"   # Ahora
+    assert ventana.tabla.item(0, 5).text() == "no presentó"   # Quedaría
+
+
+# ---------------------------------------------------------------------------
+# El aviso de ingreso no puede contradecir a la tabla
+# ---------------------------------------------------------------------------
+def test_una_revision_con_destinos_confirma_el_ingreso(ventana):
+    """
+    Un curso recién configurado no tiene grupos oficiales averiguados todavía,
+    así que al arrancar la comprobación no puede hacerse. La revisión los
+    averigua consultando el servidor: cuando trae destinos, hay evidencia de
+    sobra de que el ingreso funciona.
+
+    Dejar «no se pudo comprobar» encima de una tabla llena de respuestas de ese
+    mismo servidor sería contradecirse en pantalla.
+    """
+    from mnsync.config import Course, NotasParcialesCtx
+    from mnsync.guard import Routing, RoutingVerdict
+    from mnsync.gui.ventana import EstadoIngresos
+    from mnsync.sync import Preparacion
+
+    estado = EstadoIngresos()
+    estado.moodle.estado = "ok"
+    estado.np.detalle = "Este curso aún no tiene grupos oficiales averiguados."
+    ventana.estado_ingresos = estado
+    ventana.ingresos.setText(estado.texto)
+    assert "no se pudo comprobar" in ventana.ingresos.text()
+
+    np = NotasParcialesCtx(
+        ano="2026", pac="4", tipo="O", asignatura="00883",
+        escuela="03", catedra=253, encargado="X", modelo=4,
+    )
+    prep = Preparacion(
+        course=Course(id="c", moodle_course_id=1, np=np, groups=()),
+        uploader=None,
+        exports=[],
+        destinos=(DESTINO,),
+        planes=[],
+        routing=Routing(),
+        routing_verdict=RoutingVerdict(allowed=True),
+    )
+
+    ventana.mostrar(prep)
+
+    assert "✓ Notas Parciales" in ventana.ingresos.text()
+    assert "no se pudo comprobar" not in ventana.ingresos.text()
+
+
+def test_una_revision_sin_destinos_no_confirma_nada(ventana):
+    """Sin destinos no hubo respuesta del servidor, así que no hay evidencia."""
+    from mnsync.config import Course, NotasParcialesCtx
+    from mnsync.guard import Routing, RoutingVerdict
+    from mnsync.gui.ventana import EstadoIngresos
+    from mnsync.sync import Preparacion
+
+    estado = EstadoIngresos()
+    estado.moodle.estado = "ok"
+    estado.np.detalle = "Todavía no se puede comprobar."
+    ventana.estado_ingresos = estado
+
+    np = NotasParcialesCtx(
+        ano="2026", pac="4", tipo="O", asignatura="00883",
+        escuela="03", catedra=253, encargado="X", modelo=4,
+    )
+    ventana.mostrar(
+        Preparacion(
+            course=Course(id="c", moodle_course_id=1, np=np, groups=()),
+            uploader=None, exports=[], destinos=(), planes=[],
+            routing=Routing(), routing_verdict=RoutingVerdict(allowed=True),
+        )
+    )
+
+    assert not ventana.estado_ingresos.np.ok
+
+
+# ---------------------------------------------------------------------------
+# El apodo, cuando el curso de Moodle empieza con su código
+# ---------------------------------------------------------------------------
+def test_el_apodo_ignora_el_codigo_del_nombre_del_curso():
+    """
+    Muchos cursos se llaman «03622 Introducción a la Ciberseguridad».
+
+    Un apodo que empieza en «03622» no le dice nada a nadie, que es justamente
+    lo que este nombre existe para evitar: es lo que el profesor escribe en la
+    terminal y lo que nombra sus archivos.
+    """
+    from mnsync.gui.asistente import _apodo
+
+    assert _apodo(_borrador("03622 Introducción a la Ciberseguridad")) == (
+        "introduccion-ciberseguridad-2026-4"
+    )

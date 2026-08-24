@@ -486,8 +486,15 @@ def _apodo(borrador: Borrador) -> str:
         c for c in unicodedata.normalize("NFD", crudo.lower())
         if unicodedata.category(c) != "Mn"
     )
-    # Se saltan «a», «de», «la»: no distinguen nada y alargan el apodo.
-    palabras = [p for p in re.split(r"[^a-z0-9]+", sin_tildes) if len(p) > 2][:2]
+    # Se saltan «a», «de», «la», que no distinguen nada y alargan el apodo, y
+    # los códigos: muchos cursos de Moodle se llaman «03622 Introducción a la
+    # Ciberseguridad», y un apodo que empieza en «03622» no le dice nada a nadie
+    # —que es exactamente lo que este nombre existe para evitar—.
+    palabras = [
+        p
+        for p in re.split(r"[^a-z0-9]+", sin_tildes)
+        if len(p) > 2 and not p.isdigit()
+    ][:2]
     base = "-".join(palabras) or "curso"
 
     np = borrador.np

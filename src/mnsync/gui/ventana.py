@@ -218,6 +218,7 @@ class Ventana(QMainWindow):
         self._tarea: Tarea | None = None
         self._casillas: dict[tuple[str, str], QTableWidgetItem] = {}
         self._filas: list[FilaPlan] = []
+        self.estado_ingresos: EstadoIngresos | None = None
 
         self.setWindowTitle("mnsync — de Moodle a Notas Parciales")
         self._construir()
@@ -348,9 +349,30 @@ class Ventana(QMainWindow):
         )
 
     def _con_ingresos(self, estado: EstadoIngresos) -> None:
+        self.estado_ingresos = estado
         self.ingresos.setText(estado.texto)
         if estado.puede_revisar and self.curso is not None:
             self.revisar()
+
+    def _ingreso_confirmado_por_la_revision(self, prep: Preparacion) -> None:
+        """
+        Una revisión que trajo destinos **es** un ingreso exitoso.
+
+        Al arrancar, un curso recién configurado todavía no tiene grupos
+        oficiales averiguados y la comprobación no puede hacerse. Pero la
+        revisión los averigua consultando el servidor, así que cuando termina
+        bien ya hay evidencia de sobra. Dejar el aviso como estaba pondría
+        «no se pudo comprobar» encima de una tabla llena de respuestas de ese
+        mismo servidor, y un programa que se contradice a sí mismo en pantalla
+        no merece que se le crea ninguna de las dos cosas.
+        """
+        estado = getattr(self, "estado_ingresos", None)
+        if estado is None or estado.np.ok or not prep.destinos:
+            return
+        estado.np.estado = OK
+        estado.np.detalle = ""
+        estado.np.remedio = ""
+        self.ingresos.setText(estado.texto)
 
     # --- revisar (fases A y B, sin escribir) ------------------------------
     def revisar(self) -> None:
@@ -374,6 +396,7 @@ class Ventana(QMainWindow):
     def mostrar(self, prep: Preparacion) -> None:
         """Enseña el plan completo: los recuentos, el aviso y fila por fila."""
         self.prep = prep
+        self._ingreso_confirmado_por_la_revision(prep)
         self._filas = prep.filas()
         self.recuento.setText(_texto_recuento(self._filas))
         self.aviso.setText(_texto_aviso(prep))
@@ -413,8 +436,8 @@ class Ventana(QMainWindow):
                     fila.cedula,
                     fila.instrumento_nombre or fila.instrumento,
                     fila.destino.label,
-                    fila.nota_remota or "—",
-                    fila.nota_local or "—",
+                    nota_legible(fila.nota_remota),
+                    nota_legible(fila.nota_local),
                     etiqueta,
                 )
             ):
@@ -662,6 +685,41 @@ class Ventana(QMainWindow):
 # ---------------------------------------------------------------------------
 # Los textos que acompañan a la tabla
 # ---------------------------------------------------------------------------
+#: Lo que el sistema de la UNED escribe en una celda cuando no hay una nota.
+#:
+#: Son números reservados, no calificaciones: 998 significa «no presentó», 999
+#: «sin nota» y 994 «retiro justificado». En la tabla se muestran con su
+#: significado, porque «998» al lado de un 9,4 se lee como una nota altísima.
+MARCADORES = {
+    "998": "no presentó",
+    "999": "sin nota",
+    "994": "retirado",
+}
+
+#: Lo que escribe un profesor en Moodle para decir «no entregó».
+GUION_NO_PRESENTO = "-"
+
+
+def nota_legible(valor: str) -> str:
+    """
+    Una celda de nota tal como conviene enseñarla.
+
+    Los marcadores del servidor y el guion de Moodle son convenciones internas:
+    quien lee la tabla necesita el significado, no el código. Cualquier otra
+    cosa se muestra tal cual vino, sin reinterpretarla: una nota es de quien la
+    puso, y este programa no está para redondearla.
+    """
+    crudo = (valor or "").strip()
+    if not crudo:
+        return "—"
+    if crudo == GUION_NO_PRESENTO:
+        return "no presentó"
+
+    # El script ya rotula algunos como «998 (no presentó)»; se toma el número.
+    numero = crudo.split()[0].split(".")[0]
+    return MARCADORES.get(numero, crudo)
+
+
 def _texto_recuento(filas: list[FilaPlan]) -> str:
     """
     Una línea por cada acción posible del plan, incluidas las que dieron cero.
