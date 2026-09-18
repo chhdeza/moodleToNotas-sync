@@ -42,15 +42,6 @@ on:
           requiere iniciar sesión ni token.
         type: string
         default: "p/ci"
-      upload-sarif:
-        description: >-
-          Si es "true", sube el resultado de osv-scanner a la pestaña
-          Security > Code Scanning del repositorio. Gratis en repositorios
-          públicos; en privados requiere GitHub Advanced Security, así que
-          queda apagado por defecto para que este flujo funcione igual en
-          cualquier repositorio.
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -80,23 +71,37 @@ jobs:
         continue-on-error: ${{ inputs.fail-on-findings == false }}
 
   # ── Vulnerabilidades conocidas en dependencias declaradas ───────────────
-  # Se apoya en el flujo reutilizable oficial de osv-scanner en vez de
-  # llamar a su acción directamente: el propio proyecto pide hacerlo así
-  # porque el comportamiento de la acción suelta puede cambiar entre
-  # versiones de parche sin aviso.
+  # El propio proyecto pide usar su flujo reutilizable en vez de llamar a
+  # esta acción directamente (avisa que el comportamiento de la acción
+  # suelta puede cambiar entre versiones de parche sin aviso). Se optó por
+  # la acción de todos modos: el job de ese flujo reutilizable pide
+  # `security-events: write` y `actions: read` sin importar la
+  # configuración, y un flujo reutilizable no puede pedir más permisos de
+  # los que le dio quien lo llamó — este repositorio se quedó con el
+  # arranque fallando ("workflow is not valid") hasta que se cambió esto.
+  # Fijar por hash (el mismo commit exacto que usa por dentro su propio
+  # flujo reutilizable) cubre el riesgo que ellos señalan.
   dependencias:
     name: Vulnerabilidades en dependencias (osv-scanner)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@6e4298ebc4db23e847df9b2e2de2939d6f066c67 # v2.5.1
-    with:
-      scan-args: |-
-        --recursive
-        --skip-git=source
-        ./
-      fail-on-vuln: ${{ inputs.fail-on-findings }}
-      upload-sarif: ${{ inputs.upload-sarif }}
-      checkout-submodules: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: osv-scanner
+        uses: google/osv-scanner-action/osv-scanner-action@baa4139e56d6312335d899e6ba045fa16d1d3d0b # v2.5.1
+        env:
+          GOTOOLCHAIN: auto
+        with:
+          scan-args: |-
+            --recursive
+            --skip-git=source
+            ./
+        continue-on-error: ${{ inputs.fail-on-findings == false }}
 
   # ── Patrones de código inseguro (SAST) ───────────────────────────────────
   sast:
