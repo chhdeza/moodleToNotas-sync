@@ -1,0 +1,19 @@
+extends: default
+
+rules:
+  # Ninguno de los flujos de .github/workflows/ de este repositorio empieza
+  # con "---": no es una convención que este repositorio use en ninguna
+  # parte, y GitHub Actions no la necesita para nada.
+  document-start: disable
+  truthy:
+    # La clave "on:" de todo flujo de GitHub Actions es, en YAML 1.1, un
+    # valor "truthy" (on/off). Sin esto, yamllint la marca en cada flujo
+    # que existe. Los VALORES truthy (yes/no, on/off como valor) se
+    # siguen revisando igual; solo se dejan en paz las claves.
+    check-keys: false
+  line-length:
+    # Un "uses: owner/repo@<hash-de-40>  # vX.Y.Z" no se puede envolver sin
+    # romper la referencia a la acción. 120 es holgado sin dejar de avisar
+    # de una línea de verdad larga (coincide con line-length de ruff en
+    # pyproject.toml para Python).
+    max: 120

@@ -42,6 +42,14 @@ on:
           romper todo el primer día.
         type: boolean
         default: true
+      validate-spelling:
+        description: >-
+          El revisor ortográfico (codespell) solo conoce inglés: en un
+          repositorio en español marca como error palabras como "asume"
+          o "responde". Poner esto en false lo apaga para ese caso; en un
+          repositorio en inglés conviene dejarlo en true.
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -68,3 +76,10 @@ jobs:
           VALIDATE_ALL_CODEBASE: ${{ inputs.validate-all }}
           DEFAULT_BRANCH: ${{ inputs.default-branch }}
           DISABLE_ERRORS: ${{ inputs.fail-on-findings == false }}
+          VALIDATE_SPELL_CODESPELL: ${{ inputs.validate-spelling }}
+          # Sin permissions de escritura arriba a propósito (ver el
+          # encabezado del archivo), así que no tiene caso que super-linter
+          # intente publicar un status por commit o un comentario en el PR:
+          # solo llenaría el log de 403 sin cambiar el resultado real.
+          MULTI_STATUS: "false"
+          ENABLE_GITHUB_PULL_REQUEST_SUMMARY_COMMENT: "false"
