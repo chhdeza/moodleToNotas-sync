@@ -1,0 +1,85 @@
+name: Revisión de calidad (reutilizable)
+
+# Flujo REUTILIZABLE, genérico para cualquier repositorio de chhdeza. No
+# asume un lenguaje: usa Super-linter, que trae decenas de linters (uno
+# por lenguaje/formato) y se salta automáticamente los que no aplican
+# porque el repositorio no tiene archivos de ese tipo. Incluye, entre
+# otros, actionlint y zizmor para los propios flujos de GitHub Actions.
+#
+# Para usarlo desde otro repositorio:
+#
+#   jobs:
+#     calidad:
+#       uses: chhdeza/moodleToNotas-sync/.github/workflows/quality-checks.yml@main
+#       permissions:
+#         contents: read
+#
+# Por defecto SOLO revisa los archivos que cambiaron respecto a la rama
+# por defecto (validate-all: false). Es a propósito: prender esto en un
+# repositorio con historia significa que revisar TODO el código ya
+# existente ahogaría el primer PR en cientos de hallazgos viejos que nadie
+# pidió resolver hoy. Para una pasada completa (por ejemplo, una vez por
+# semana), un flujo que llama a este con validate-all: true.
+
+on:
+  workflow_call:
+    inputs:
+      validate-all:
+        description: >-
+          Si es "true", revisa todo el árbol del repositorio. Si es
+          "false" (por defecto), revisa solo lo que cambió respecto a
+          default-branch.
+        type: boolean
+        default: false
+      default-branch:
+        description: "Rama contra la que se comparan los cambios cuando validate-all es false."
+        type: string
+        default: "main"
+      fail-on-findings:
+        description: >-
+          Si es "false", corre los linters e informa sin hacer fallar el
+          flujo. Útil para adoptar esto en un repositorio viejo sin
+          romper todo el primer día.
+        type: boolean
+        default: true
+      validate-spelling:
+        description: >-
+          El revisor ortográfico (codespell) solo conoce inglés: en un
+          repositorio en español marca como error palabras como "asume"
+          o "responde". Poner esto en false lo apaga para ese caso; en un
+          repositorio en inglés conviene dejarlo en true.
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  super-linter:
+    name: Linters (super-linter)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # super-linter necesita el historial para saber qué cambió
+          persist-credentials: false
+          # Sin submódulos: cada repositorio responde por su propio código,
+          # no por el de terceros que trae incluido.
+
+      - name: super-linter
+        uses: super-linter/super-linter@4ce20838b8ab83717e78138c5b3a1407148e0918 # v8.7.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          VALIDATE_ALL_CODEBASE: ${{ inputs.validate-all }}
+          DEFAULT_BRANCH: ${{ inputs.default-branch }}
+          DISABLE_ERRORS: ${{ inputs.fail-on-findings == false }}
+          VALIDATE_SPELL_CODESPELL: ${{ inputs.validate-spelling }}
+          # Sin permissions de escritura arriba a propósito (ver el
+          # encabezado del archivo), así que no tiene caso que super-linter
+          # intente publicar un status por commit o un comentario en el PR:
+          # solo llenaría el log de 403 sin cambiar el resultado real.
+          MULTI_STATUS: "false"
+          ENABLE_GITHUB_PULL_REQUEST_SUMMARY_COMMENT: "false"

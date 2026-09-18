@@ -1,0 +1,132 @@
+name: Revisión de seguridad (reutilizable)
+
+# Flujo REUTILIZABLE, genérico para cualquier repositorio de chhdeza sin
+# importar el lenguaje: no asume Python, Node, PHP ni nada en particular.
+# Este repositorio solo lo aloja; quien quiera usarlo en otro repositorio
+# llama a este archivo con `uses:`, así:
+#
+#   jobs:
+#     seguridad:
+#       uses: chhdeza/moodleToNotas-sync/.github/workflows/security-checks.yml@main
+#       permissions:
+#         contents: read
+#
+# Tres herramientas, todas gratuitas y de código abierto, cada una cubre
+# algo que las otras dos no ven:
+#   - gitleaks     -> secretos filtrados (claves, tokens, contraseñas)
+#   - osv-scanner  -> vulnerabilidades conocidas en dependencias declaradas
+#   - semgrep      -> patrones de código inseguro (SAST)
+#
+# Ninguno de los tres necesita un token de pago para el uso que se le da
+# aquí. La única salvedad: si este flujo se llama desde un repositorio que
+# pertenece a una organización de GitHub (no a una cuenta personal),
+# gitleaks-action pide una licencia gratuita en https://gitleaks.io y un
+# secreto GITLEAKS_LICENSE. Para cuentas personales como chhdeza no hace
+# falta.
+
+on:
+  workflow_call:
+    inputs:
+      fail-on-findings:
+        description: >-
+          Si es "true" (por defecto), el flujo falla cuando alguna
+          herramienta encuentra algo. Si es "false", solo informa y deja
+          pasar el flujo: útil para adoptar esto en un repositorio viejo
+          sin romper todo el primer día.
+        type: boolean
+        default: true
+      semgrep-config:
+        description: >-
+          Conjunto de reglas de Semgrep a usar. "p/ci" es el paquete que
+          el propio Semgrep recomienda para integración continua y no
+          requiere iniciar sesión ni token.
+        type: string
+        default: "p/ci"
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Secretos filtrados en el historial o el árbol actual ────────────────
+  secretos:
+    name: Secretos filtrados (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # gitleaks necesita el historial completo, no solo el último commit
+          persist-credentials: false
+          # Sin submódulos: cada repositorio responde por su propio código,
+          # no por el de terceros que trae incluido.
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITLEAKS_ENABLE_SUMMARY: "true"
+          GITLEAKS_ENABLE_COMMENTS: "false" # ver resultados en el resumen, no llenar el PR de comentarios
+        continue-on-error: ${{ inputs.fail-on-findings == false }}
+
+  # ── Vulnerabilidades conocidas en dependencias declaradas ───────────────
+  # El propio proyecto pide usar su flujo reutilizable en vez de llamar a
+  # esta acción directamente (avisa que el comportamiento de la acción
+  # suelta puede cambiar entre versiones de parche sin aviso). Se optó por
+  # la acción de todos modos: el job de ese flujo reutilizable pide
+  # `security-events: write` y `actions: read` sin importar la
+  # configuración, y un flujo reutilizable no puede pedir más permisos de
+  # los que le dio quien lo llamó — este repositorio se quedó con el
+  # arranque fallando ("workflow is not valid") hasta que se cambió esto.
+  # Fijar por hash (el mismo commit exacto que usa por dentro su propio
+  # flujo reutilizable) cubre el riesgo que ellos señalan.
+  dependencias:
+    name: Vulnerabilidades en dependencias (osv-scanner)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: osv-scanner
+        uses: google/osv-scanner-action/osv-scanner-action@6e4298ebc4db23e847df9b2e2de2939d6f066c67 # v2.5.1
+        env:
+          GOTOOLCHAIN: auto
+        with:
+          # Sin --include-git-root, osv-scanner ya excluye por defecto
+          # cualquier subdirectorio que sea su propio repositorio git —
+          # como vendor/grade-uploader, el submódulo — sin necesidad de
+          # ningún flag para pedirlo.
+          scan-args: |-
+            --recursive
+            ./
+        continue-on-error: ${{ inputs.fail-on-findings == false }}
+
+  # ── Patrones de código inseguro (SAST) ───────────────────────────────────
+  sast:
+    name: Análisis estático de código (semgrep)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.x"
+
+      - name: Instalar semgrep
+        run: python -m pip install --quiet "semgrep==1.174.0"
+
+      - name: semgrep
+        env:
+          SEMGREP_CONFIG: ${{ inputs.semgrep-config }}
+        run: semgrep scan --config "$SEMGREP_CONFIG" --error --metrics=off .
+        continue-on-error: ${{ inputs.fail-on-findings == false }}
