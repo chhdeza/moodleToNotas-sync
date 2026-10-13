@@ -60,7 +60,7 @@ from ..sync import (
     ruta_diario,
 )
 from ..uploader import Uploader, parece_rechazo_de_credenciales, reja_verificada
-from .estilo import Mensaje, repintar, tinte
+from .estilo import ConAire, Mensaje, repintar, tinte
 from .tareas import Fallo, Tarea, lanzar
 
 #: El orden en que se cuentan las acciones del plan: **todas**, incluidas las
@@ -295,6 +295,7 @@ class Ventana(QMainWindow):
         )
         self.tabla.setAlternatingRowColors(True)
         self.tabla.setShowGrid(False)
+        self.tabla.setItemDelegate(ConAire(self.tabla))
         self.tabla.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.tabla.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.tabla.horizontalHeader().setSectionResizeMode(
@@ -505,9 +506,6 @@ class Ventana(QMainWindow):
             else ""
         )
         self.tabla.resizeColumnsToContents()
-        # Ajustadas al contenido quedan pegadas unas a otras; se les da aire.
-        for col in range(1, self.tabla.columnCount()):
-            self.tabla.setColumnWidth(col, self.tabla.columnWidth(col) + 24)
         self.tabla.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.Stretch
         )

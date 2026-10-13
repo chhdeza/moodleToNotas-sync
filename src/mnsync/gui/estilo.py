@@ -20,9 +20,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
-from PySide6.QtWidgets import QApplication, QLabel, QWidget
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QBrush, QColor, QFont, QFontDatabase, QPalette
+from PySide6.QtWidgets import (
+    QApplication,
+    QLabel,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+    QWidget,
+)
 
 from ..acciones import NO_PRESENTO, RETIRADO, REVISAR, SIN_ROSTER, SOBRESCRIBIRIA, SUBIR, YA_ESTABA
 
@@ -111,6 +118,53 @@ class Mensaje(QLabel):
         super().setText(texto)
         self.setVisible(bool(texto))
         repintar(self, "tono", tono or tono_de(texto))
+
+
+#: El margen a cada lado del texto de una celda, el mismo que el del encabezado.
+AIRE = 10
+
+
+class ConAire(QStyledItemDelegate):
+    """
+    Dibuja las celdas con margen a los costados, sin perder su color.
+
+    La forma obvia —``padding`` en ``QTableWidget::item`` de la hoja de
+    estilos— hace que Qt deje de pintar el fondo propio de cada celda, y con
+    él los colores de las acciones. Así que el margen se pone acá: el fondo y
+    la selección se pintan a lo ancho de la celda, y solo el contenido entra
+    con margen.
+
+    El clic se mide con el mismo margen que el dibujo; si no, la casilla de
+    «Autorizo» se vería en un lugar y respondería en otro.
+    """
+
+    def _con_margen(self, option: QStyleOptionViewItem) -> QStyleOptionViewItem:
+        o = QStyleOptionViewItem(option)
+        o.rect = option.rect.adjusted(AIRE, 0, -AIRE, 0)
+        return o
+
+    def sizeHint(self, option, index) -> QSize:  # noqa: N802 - API de Qt
+        s = super().sizeHint(option, index)
+        return QSize(s.width() + 2 * AIRE, s.height())
+
+    def paint(self, painter, option, index) -> None:
+        if option.state & QStyle.StateFlag.State_Selected:
+            painter.fillRect(option.rect, option.palette.highlight())
+        else:
+            fondo = index.data(Qt.ItemDataRole.BackgroundRole)
+            if fondo is not None:
+                painter.fillRect(option.rect, QBrush(fondo))
+        super().paint(painter, self._con_margen(option), index)
+
+    def initStyleOption(self, option, index) -> None:  # noqa: N802 - API de Qt
+        super().initStyleOption(option, index)
+        # El fondo y la selección ya se pintaron a lo ancho; pintarlos otra
+        # vez dentro del margen dejaría un recuadro. El de foco sobra igual.
+        option.backgroundBrush = QBrush()
+        option.state &= ~(QStyle.StateFlag.State_Selected | QStyle.StateFlag.State_HasFocus)
+
+    def editorEvent(self, event, model, option, index) -> bool:  # noqa: N802 - API de Qt
+        return super().editorEvent(event, model, self._con_margen(option), index)
 
 
 def repintar(widget: QWidget, propiedad: str, valor: str) -> None:
@@ -251,7 +305,7 @@ def hoja(f: Letras) -> str:
         font-weight: 600;
         border: none;
         border-bottom: 2px solid {REGLA};
-        padding: 8px;
+        padding: 8px {AIRE}px;
     }}
 
     QProgressBar {{

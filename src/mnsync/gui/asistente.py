@@ -56,7 +56,7 @@ from ..config import (
 from ..discovery import ContextCheck, verificar_contexto
 from ..errors import MnsyncError
 from ..moodle_export import MoodleCourse, MoodleGroup, MoodleSession
-from .estilo import AMBAR, Mensaje, repintar
+from .estilo import AMBAR, ConAire, Mensaje, repintar
 from .tareas import Fallo, Tarea, lanzar
 
 
@@ -81,10 +81,11 @@ def _tabla_de_lectura(encabezados: list[str], *, ultima_es_cifra: bool = False) 
     """
     Una tabla para mirar, no para editar: sin selección ni foco, y con el ancho donde está el texto.
 
-    Si la última columna es una cifra, se ajusta a su contenido y va a la
-    derecha, y el texto se queda con el resto. Estirarla a ella, como hace Qt
-    por defecto, cortaba el nombre del grupo en «CU 12 / …» para darle media
-    ventana a un número de dos dígitos.
+    La última columna —una cifra, o un código corto de instrumento— se ajusta
+    a su contenido, y la primera se queda con el resto. Estirar la última, como
+    hace Qt por defecto, cortaba el nombre del grupo en «CU 12 / …» y el de la
+    columna de Moodle en «Tarea:Entre…» para darle media ventana a un dato
+    corto. Si es una cifra, además va a la derecha.
     """
     tabla = QTableWidget(0, len(encabezados))
     tabla.setHorizontalHeaderLabels(encabezados)
@@ -92,6 +93,7 @@ def _tabla_de_lectura(encabezados: list[str], *, ultima_es_cifra: bool = False) 
     tabla.verticalHeader().setDefaultSectionSize(34)
     tabla.setAlternatingRowColors(True)
     tabla.setShowGrid(False)
+    tabla.setItemDelegate(ConAire(tabla))
     tabla.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
     tabla.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
     tabla.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -99,9 +101,9 @@ def _tabla_de_lectura(encabezados: list[str], *, ultima_es_cifra: bool = False) 
     cabecera = tabla.horizontalHeader()
     cabecera.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
     cabecera.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+    ultima = len(encabezados) - 1
+    cabecera.setSectionResizeMode(ultima, QHeaderView.ResizeMode.ResizeToContents)
     if ultima_es_cifra:
-        ultima = len(encabezados) - 1
-        cabecera.setSectionResizeMode(ultima, QHeaderView.ResizeMode.ResizeToContents)
         tabla.horizontalHeaderItem(ultima).setTextAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
@@ -839,7 +841,11 @@ class PasoColumnas(PasoBase):
         for i in check.instrumentos:
             fila = self.tabla.rowCount()
             self.tabla.insertRow(fila)
-            self.tabla.setItem(fila, 0, QTableWidgetItem(i.columna))
+            columna = QTableWidgetItem(i.columna)
+            # Los nombres de Moodle pueden ser largos; si no caben, el
+            # nombre entero queda a mano sobre la celda.
+            columna.setToolTip(i.columna)
+            self.tabla.setItem(fila, 0, columna)
             instrumento = QTableWidgetItem(i.descripcion)
             if not i.emparejada:
                 # Ámbar, como en la ventana semanal: algo que no se va a subir
