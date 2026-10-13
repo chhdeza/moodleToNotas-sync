@@ -224,7 +224,9 @@ def hoja(f: Letras) -> str:
     }}
     QLineEdit:focus, QComboBox:focus {{ border: 2px solid {FOCO}; padding: 4px 7px; }}
     QLineEdit:disabled, QComboBox:disabled {{ color: {TENUE}; background: {MESA}; }}
-    QComboBox::drop-down {{ border: none; width: 24px; }}
+    /* Sin regla para ::drop-down a propósito: restilarlo hace que Qt deje de
+       dibujar la flecha nativa, y el desplegable pasa por un campo de texto
+       —nadie adivina que tiene más opciones—. */
     QComboBox QAbstractItemView {{
         background: {PAPEL}; border: 1px solid {REGLA};
         selection-background-color: {AZUL.fondo}; selection-color: {TINTA};
