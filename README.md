@@ -319,6 +319,10 @@ MOODLE_PASSWORD=tu_contraseña_de_moodle
 # ─── Notas Parciales (SSO UNED) ──────────────────
 NP_NTLM_USER=jperez
 NP_NTLM_PASSWORD=tu_contraseña_del_sso
+
+# Tu cédula de tutora o tutor, sin guiones. No es una contraseña, pero sí un
+# dato personal: por eso va acá y no en courses.yml.
+NP_TUTOR=9999999999
 ```
 
 > [!IMPORTANT]
@@ -419,8 +423,7 @@ courses:
       escuela: "03"
       catedra: 253
       encargado: ARODRIGUEZP
-      tutor: "9999999999"          # tu cédula
-      modelo: 4
+      modelo: 4                    # tu cédula NO va acá: va en NP_TUTOR
 
     policy:
       allow_update: false          # ¿puede cambiar notas ya puestas?
@@ -615,12 +618,15 @@ Es un servicio que ejecuta programas por vos en una computadora prestada, según
 
 1️⃣ Subí este proyecto a un repositorio **privado** en GitHub.
 
-2️⃣ En **Settings → Secrets and variables → Actions**, agregá los cinco secretos:
+2️⃣ En **Settings → Secrets and variables → Actions**, agregá estos secretos:
 
 ```
 MOODLE_URL          MOODLE_USERNAME     MOODLE_PASSWORD
-NP_NTLM_USER        NP_NTLM_PASSWORD
+NP_NTLM_USER        NP_NTLM_PASSWORD    NP_TUTOR
+COURSES_YML
 ```
+
+En `COURSES_YML` va **el contenido completo** de tu `courses.yml`, copiado y pegado. El archivo no se sube al repositorio (es tuyo, y está en `.gitignore`), así que la automatización lo recibe por acá.
 
 3️⃣ Andá a la pestaña **Actions**, elegí *«Sincronizar notas»* y lanzala a mano con **`commit` en `false`**. Revisá el resumen.
 
@@ -721,7 +727,7 @@ Para los comandos manuales, sí, mientras corren (segundos o pocos minutos). Par
 | `.env` | Tus dos contraseñas | **Nunca** a Git, nunca por correo ni WhatsApp |
 | `salida/*.xlsx` | Cédulas, nombres, notas | Datos personales de estudiantes |
 | `salida/notas_plan*.csv` | Cédulas y notas | Datos personales de estudiantes |
-| `courses.yml` | Solo códigos de curso | Se puede compartir sin problema |
+| `courses.yml` | Solo códigos de curso, sin cédulas | No va a Git (es tu configuración); para la automatización, va como secreto `COURSES_YML` |
 
 Todos los archivos con datos sensibles ya están excluidos de Git. Para comprobarlo:
 

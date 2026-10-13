@@ -12,43 +12,30 @@ intactas sus cuatro capas de seguridad —prueba por defecto, ``--allow-update``
 obligatorio para sobrescribir, justificación registrada y verificación
 posterior— en vez de sortearlas.
 
-Una sola invocación por grupo: cada grupo tiene su propio plan y sus propios
-resultados, para que el alcance de cada escritura quede demostrable y el
-fallo de un grupo no contamine a los demás.
+Una sola invocación por destino: cada destino tiene su propio plan y sus
+propios resultados, para que el alcance de cada escritura quede demostrable y
+el fallo de un destino no contamine a los demás.
 """
 
 from __future__ import annotations
 
 import csv
 import os
-import re
 import subprocess
 import sys
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+import openpyxl
+
+from .acciones import SIN_ROSTER, SOBRESCRIBIRIA
 from .config import Course, Credentials, Destination
 from .errors import UploaderError
 
-#: Acciones del plan que implican escribir en el sistema de la UNED.
-ACCIONES_DE_ESCRITURA = frozenset({"upload", "mark_not_presented", "would_overwrite"})
-
-#: La acción con la que el script marca a quien no está en el roster consultado.
-ACCION_SIN_ROSTER = "skip_not_in_roster"
-
-#: La acción de una nota que **ya estaba puesta** y quedaría distinta.
-#:
-#: Es la única que exige permiso explícito, y en la aplicación de escritorio ese
-#: permiso se da fila por fila (specs/003, A-11).
-ACCION_SOBRESCRIBIRIA = "would_overwrite"
-
 #: Hasta qué número de grupo se sondea al descubrir destinos (specs/001, D-09).
 MAX_GRUPO_SONDEO = 5
-
-#: «DESAMPARADOS (42)» → «42» (specs/001, D-08).
-_RE_INSTITUCION = re.compile(r"\((\d{1,3})\)\s*$")
 
 
 @dataclass
@@ -214,7 +201,7 @@ class Uploader:
         return (resultados if resultados.exists() else None), res
 
     # --- comprobaciones ---------------------------------------------------
-    def probar_ingreso(self, destination: Destination | None = None) -> RunResult:
+    def probar_ingreso(self) -> RunResult:
         """
         Comprueba que Notas Parciales acepta las credenciales. Solo lectura.
 
@@ -232,10 +219,7 @@ class Uploader:
         error que lo dice así, en vez de inventar un destino y arriesgar que el
         servidor conteste otra cosa.
         """
-        destino = destination or (
-            self.course.destinations[0] if self.course.destinations else None
-        )
-        if destino is None:
+        if not self.course.destinations:
             raise UploaderError(
                 "Todavía no se puede comprobar el ingreso a Notas Parciales.",
                 remedio=(
@@ -245,6 +229,7 @@ class Uploader:
                 ),
             )
 
+        destino = self.course.destinations[0]
         res = self._run(
             [
                 "probe",
@@ -282,14 +267,12 @@ class Uploader:
         self,
         cus: Sequence[str],
         xlsx_por_cu: dict[str, Path],
-        *,
-        max_grupo: int = MAX_GRUPO_SONDEO,
-    ) -> list[Destination]:
+    ) -> dict[Destination, tuple[Path, RunResult]]:
         """
         Averigua a qué destinos van a parar los estudiantes, sondeando.
 
         Por cada centro universitario presente se prueban los grupos 1 a
-        ``max_grupo`` y se conservan los que contienen a alguien
+        ``MAX_GRUPO_SONDEO`` y se conservan los que contienen a alguien
         (specs/002, R-05). Un CU puede aportar varios destinos: es el caso
         normal, no una anomalía (specs/001, D-04).
 
@@ -298,31 +281,33 @@ class Uploader:
 
         Se detiene el sondeo de un CU en cuanto todos sus estudiantes tienen
         destino: en la práctica, casi siempre en el primer o segundo intento.
+
+        Devuelve el plan de cada destino encontrado. La sonda **es** el plan
+        —mismo destino, mismo archivo, mismos argumentos—, así que quien la
+        pidió no tiene que volver a consultarle lo mismo al servidor.
         """
-        encontrados: list[Destination] = []
+        encontrados: dict[Destination, tuple[Path, RunResult]] = {}
 
         for cu in cus:
             xlsx = xlsx_por_cu.get(cu)
             if xlsx is None:
                 continue
             pendientes = _cedulas_del_xlsx(xlsx)
-            for numero in range(1, max_grupo + 1):
+            for numero in range(1, MAX_GRUPO_SONDEO + 1):
                 if not pendientes:
                     break
                 candidato = Destination(cu=cu, grupo=numero)
-                ubicados = self.cedulas_en_destino(candidato, [xlsx])
-                if not ubicados:
+                sondeo = self._sondear(candidato, xlsx)
+                if sondeo is None:
                     continue
-                encontrados.append(candidato)
-                pendientes -= ubicados
+                encontrados[candidato] = sondeo
+                pendientes -= self.cedulas_del_plan(sondeo[0])
 
         return encontrados
 
-    def cedulas_en_destino(
-        self, destination: Destination, xlsx_paths: Sequence[Path]
-    ) -> set[str]:
+    def _sondear(self, destination: Destination, xlsx: Path) -> tuple[Path, RunResult] | None:
         """
-        Las cédulas que el servidor reconoce como propias de este destino.
+        El plan de un destino candidato, si el roster oficial reconoce a alguien.
 
         Se usa el propio ``plan`` como sonda: las filas que **no** son
         ``skip_not_in_roster`` son exactamente las que el roster oficial
@@ -330,15 +315,15 @@ class Uploader:
         código que ya lo hace bien (specs/002, R-13).
         """
         try:
-            plan_path, _ = self.plan(destination, xlsx_paths)
+            plan_path, res = self.plan(destination, [xlsx])
         except UploaderError:
             # Un grupo que no existe no es un error del sondeo: es una respuesta.
-            return set()
+            return None
 
-        try:
-            return self.cedulas_del_plan(plan_path)
-        finally:
+        if not self.cedulas_del_plan(plan_path):
             plan_path.unlink(missing_ok=True)
+            return None
+        return plan_path, res
 
     @staticmethod
     def cedulas_del_plan(plan_path: Path) -> set[str]:
@@ -351,17 +336,12 @@ class Uploader:
         return {
             fila["cedula"]
             for fila in leer_plan(plan_path)
-            if fila.get("accion") != ACCION_SIN_ROSTER and fila.get("cedula")
+            if fila.get("accion") != SIN_ROSTER and fila.get("cedula")
         }
 
 
 def _cedulas_del_xlsx(path: Path) -> set[str]:
     """Las cédulas que contiene un archivo de calificaciones."""
-    try:
-        import openpyxl
-    except ImportError:  # pragma: no cover - dependencia declarada
-        return set()
-
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     try:
         filas = wb.active.iter_rows(values_only=True)
@@ -395,20 +375,12 @@ def _recortar_al_destino(plan_path: Path, destination: Destination) -> None:
     estudiante exactamente una vez, y cada fila proviene de una consulta hecha
     con el destino correcto y explícito.
     """
-    with plan_path.open("r", encoding="utf-8-sig", newline="") as f:
-        lector = csv.DictReader(f)
-        campos = lector.fieldnames or []
-        propias = [
-            fila
-            for fila in lector
-            if (fila.get("cu") or "").strip() == destination.cu
-            and (fila.get("grupo") or "").strip() == str(destination.grupo)
-        ]
-
-    with plan_path.open("w", encoding="utf-8", newline="") as f:
-        escritor = csv.DictWriter(f, fieldnames=campos)
-        escritor.writeheader()
-        escritor.writerows(propias)
+    _filtrar_plan(
+        plan_path,
+        plan_path,
+        lambda f: _campo(f, "cu") == destination.cu
+        and _campo(f, "grupo") == str(destination.grupo),
+    )
 
 
 def escribir_plan_autorizado(
@@ -429,22 +401,32 @@ def escribir_plan_autorizado(
     Las filas que no escriben nada se conservan, para que el plan siga siendo el
     relato completo de la corrida y no solo su parte ejecutable.
     """
-    filas = leer_plan(plan_path)
-    conservadas = [
-        f
-        for f in filas
-        if f.get("accion") != ACCION_SOBRESCRIBIRIA
-        or (f.get("cedula", ""), f.get("instrumento", "")) in autorizadas
-    ]
+    return _filtrar_plan(
+        plan_path,
+        salida,
+        lambda f: _campo(f, "accion") != SOBRESCRIBIRIA
+        or (_campo(f, "cedula"), _campo(f, "instrumento")) in autorizadas,
+    )
 
-    with plan_path.open("r", encoding="utf-8-sig", newline="") as f:
-        campos = csv.DictReader(f).fieldnames or []
+
+def _filtrar_plan(
+    origen: Path, salida: Path, conservar: Callable[[dict[str, str]], bool]
+) -> Path:
+    """Copia un plan dejando solo las filas que ``conservar`` acepta."""
+    with origen.open("r", encoding="utf-8-sig", newline="") as f:
+        lector = csv.DictReader(f)
+        campos = lector.fieldnames or []
+        filas = [fila for fila in lector if conservar(fila)]
 
     with salida.open("w", encoding="utf-8", newline="") as f:
         escritor = csv.DictWriter(f, fieldnames=campos)
         escritor.writeheader()
-        escritor.writerows(conservadas)
+        escritor.writerows(filas)
     return salida
+
+
+def _campo(fila: dict[str, str], nombre: str) -> str:
+    return (fila.get(nombre) or "").strip()
 
 
 def leer_plan(plan_path: Path) -> list[dict[str, str]]:
@@ -510,16 +492,6 @@ def reja_verificada(tmp_dir: Path) -> bool:
         return False
     salida = p.stdout or ""
     return "SENTINEL=1" in salida and "BLOCKED=True" in salida
-
-
-def cu_de_institucion(valor: str) -> str:
-    """
-    Extrae el código de centro universitario de la columna «Institución».
-
-    Moodle la escribe siempre como ``DESAMPARADOS (42)`` (specs/001, D-08).
-    """
-    m = _RE_INSTITUCION.search(valor or "")
-    return m.group(1) if m else ""
 
 
 def _pista_de_error(salida: str) -> str:

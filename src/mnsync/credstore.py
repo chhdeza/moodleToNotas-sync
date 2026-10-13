@@ -29,6 +29,14 @@ from dataclasses import dataclass
 SERVICIO_MOODLE = "mnsync:moodle"
 SERVICIO_NP = "mnsync:notasparciales"
 
+#: Registro donde vive la cédula del tutor, dentro del servicio de Notas
+#: Parciales. Los guiones bajos la separan de cualquier nombre de usuario real.
+_CLAVE_TUTOR = "__tutor__"
+
+#: Registro auxiliar que guarda el nombre de usuario, para poder recuperarlo
+#: en sistemas donde `get_credential` no lo devuelve solo.
+_CLAVE_USUARIO = "__usuario__"
+
 
 @dataclass(frozen=True)
 class StoredCredential:
@@ -167,15 +175,6 @@ def borrar(servicio: str) -> None:
             keyring.delete_password(servicio, usuario)
         except Exception:  # pragma: no cover - no había nada que borrar
             pass
-
-
-#: Registro donde vive la cédula del tutor, dentro del servicio de Notas
-#: Parciales. Los guiones bajos la separan de cualquier nombre de usuario real.
-_CLAVE_TUTOR = "__tutor__"
-
-#: Registro auxiliar que guarda el nombre de usuario, para poder recuperarlo
-#: en sistemas donde `get_credential` no lo devuelve solo.
-_CLAVE_USUARIO = "__usuario__"
 
 
 class CredStoreNoDisponible(RuntimeError):

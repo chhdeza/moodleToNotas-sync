@@ -13,32 +13,14 @@ entre filas de detalle.
 
 from __future__ import annotations
 
-import csv
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from .acciones import ETIQUETAS, NUEVAS, REQUIEREN_ATENCION, SOBRESCRIBIRIA, etiqueta
 from .config import Course, Destination, MoodleGroupRef
 from .guard import GuardVerdict, PlanSummary, Routing, RoutingVerdict
-
-#: Cómo se llama cada acción en castellano llano, y qué debe hacer el profesor.
-ACCIONES = {
-    "upload": ("Nota nueva subida", "Nada, es lo normal"),
-    "mark_not_presented": ("Marcada como «no presentó»", "Confirmá que de verdad no entregó"),
-    "skip_already_set": ("Ya estaba igual", "Nada. Ver muchas de estas es buena señal"),
-    "would_overwrite": ("Cambiaría una nota existente", "🛑 Revisar"),
-    "skip_not_in_roster": ("De otro grupo oficial", "Nada: lo recoge el plan de su grupo"),
-    "skip_retirado": ("Estudiante retirado", "Nada"),
-    "review": ("Caso raro, no se tocó", "🛑 Revisar"),
-}
-
-#: Acciones que el profesor debería mirar sí o sí.
-#:
-#: ``skip_not_in_roster`` NO está acá: con el abanico de destinos, casi todas
-#: esas filas son estudiantes de otro destino, y marcarlas como problema
-#: ahogaría el reporte. Los que de verdad no aparecen en ningún lado se
-#: reportan aparte, con nombre y apellido (specs/002, R-07).
-REQUIEREN_ATENCION = ("would_overwrite", "review")
+from .uploader import leer_plan
 
 
 @dataclass
@@ -63,18 +45,13 @@ class DestinationOutcome:
     aplicado: PlanSummary | None = None
 
     @property
-    def destination(self) -> Destination:
-        return self.summary.destination
-
-    @property
     def label(self) -> str:
         return self.summary.destination.label
 
     @property
     def acciones_escritas(self) -> tuple[str, ...]:
         """Las acciones que de verdad llegaron a escribirse en esta corrida."""
-        base = ("upload", "mark_not_presented")
-        return (*base, "would_overwrite") if self.allow_update else base
+        return (*NUEVAS, SOBRESCRIBIRIA) if self.allow_update else NUEVAS
 
     @property
     def ejecutado(self) -> PlanSummary:
@@ -120,7 +97,7 @@ class RunReport:
     @property
     def total_cambios(self) -> int:
         """Cambios que el plan propuso (incluye los que esperan autorización)."""
-        return sum(o.summary.cambios for o in self.outcomes if o.summary)
+        return sum(o.summary.cambios for o in self.outcomes)
 
     @property
     def total_escritas(self) -> int:
@@ -145,15 +122,7 @@ class RunReport:
         Devuelve ``(cédula, nombre, cu)``. Es poco frecuente (specs/001, D-07),
         y justamente por eso cada uno merece que se lo nombre.
         """
-        if self.routing is None:
-            return []
-        cu_por_cedula = {
-            cedula: cu for cu, cedulas in self.routing.por_cu.items() for cedula in cedulas
-        }
-        return sorted(
-            (cedula, self.routing.nombres.get(cedula, ""), cu_por_cedula.get(cedula, ""))
-            for cedula in self.routing.sin_destino()
-        )
+        return self.routing.sin_destino_detalle() if self.routing is not None else []
 
     @property
     def necesita_atencion(self) -> bool:
@@ -167,6 +136,16 @@ class RunReport:
         )
 
     # --- salida ---------------------------------------------------------
+    def _desenlace(self, o: DestinationOutcome) -> str:
+        """En qué terminó un destino: un solo orden de precedencia para las dos salidas."""
+        if o.error:
+            return "error"
+        if o.verdict.blocked:
+            return "freno"
+        if o.escrito:
+            return "ensayo" if self.ensayo else "escrito"
+        return "prueba"
+
     @property
     def modo(self) -> str:
         """Cómo hay que leer los números de este reporte."""
@@ -196,16 +175,13 @@ class RunReport:
         L.append("| Destino | Suyos | Cambios | Ya estaban | A revisar | Resultado |")
         L.append("|---|---:|---:|---:|---:|---|")
         for o in self.outcomes:
-            if o.error:
-                estado = "❌ error"
-            elif o.verdict.blocked:
-                estado = "🛑 detenido por un freno"
-            elif o.escrito and self.ensayo:
-                estado = f"🧪 ensayo ({o.n_escritas} se habrían escrito)"
-            elif o.escrito:
-                estado = f"✅ escrito ({o.n_escritas})"
-            else:
-                estado = "🧪 prueba"
+            estado = {
+                "error": "❌ error",
+                "freno": "🛑 detenido por un freno",
+                "ensayo": f"🧪 ensayo ({o.n_escritas} se habrían escrito)",
+                "escrito": f"✅ escrito ({o.n_escritas})",
+                "prueba": "🧪 prueba",
+            }[self._desenlace(o)]
             atencion = sum(o.summary.por_accion.get(a, 0) for a in REQUIEREN_ATENCION)
             L.append(
                 f"| {o.label} | {o.summary.propias} | {o.summary.cambios} | "
@@ -304,8 +280,8 @@ class RunReport:
         for accion, cantidad in o.summary.por_accion.most_common():
             if not cantidad:
                 continue
-            etiqueta, que_hacer = ACCIONES.get(accion, (accion, ""))
-            L.append(f"| {etiqueta} | {cantidad} | {que_hacer} |")
+            nombre, que_hacer = ETIQUETAS.get(accion, (accion, ""))
+            L.append(f"| {nombre} | {cantidad} | {que_hacer} |")
         L.append("")
 
         escritas = self._filas_escritas(o)
@@ -336,10 +312,9 @@ class RunReport:
             L.append("| Cédula | Nombre | Instrumento | Qué pasó | Motivo |")
             L.append("|---|---|---|---|---|")
             for fila in atencion:
-                etiqueta = ACCIONES.get(fila["accion"], (fila["accion"], ""))[0]
                 L.append(
                     f"| {fila['cedula']} | {fila['nombre']} | {fila['instrumento']} | "
-                    f"{etiqueta} | {fila['motivo']} |"
+                    f"{etiqueta(fila['accion'])} | {fila['motivo']} |"
                 )
             L.append("")
             L.append("> La decisión final sobre estos casos es del profesor.")
@@ -347,41 +322,36 @@ class RunReport:
 
         return L
 
-    def _leer_plan(
-        self, o: DestinationOutcome, path: Path | None = None
-    ) -> list[dict[str, str]]:
-        ruta = path or o.summary.plan_path
-        if not ruta.exists():
-            return []
-        with ruta.open("r", encoding="utf-8-sig", newline="") as f:
-            return [{k: (v or "").strip() for k, v in r.items()} for r in csv.DictReader(f)]
+    @staticmethod
+    def _leer_plan(ruta: Path) -> list[dict[str, str]]:
+        """Las filas de un plan; ninguna si el destino ni llegó a planificarse."""
+        return leer_plan(ruta) if ruta.exists() else []
 
     def _filas_escritas(self, o: DestinationOutcome) -> list[dict[str, str]]:
         if not o.escrito:
             return []
         return [
             r
-            for r in self._leer_plan(o, o.ejecutado.plan_path)
+            for r in self._leer_plan(o.ejecutado.plan_path)
             if r.get("accion") in o.acciones_escritas
         ]
 
     def _filas_de_atencion(self, o: DestinationOutcome) -> list[dict[str, str]]:
-        return [r for r in self._leer_plan(o) if r.get("accion") in REQUIEREN_ATENCION]
+        return [
+            r for r in self._leer_plan(o.summary.plan_path) if r.get("accion") in REQUIEREN_ATENCION
+        ]
 
     # --- resumen corto para la terminal ---------------------------------
     def to_console(self) -> str:
         L: list[str] = []
         for o in self.outcomes:
-            if o.error:
-                icono, detalle = "❌", o.error
-            elif o.verdict.blocked:
-                icono, detalle = "🛑", o.verdict.reason
-            elif o.escrito and self.ensayo:
-                icono, detalle = "🧪", f"{o.n_escritas} nota(s) se habrían escrito"
-            elif o.escrito:
-                icono, detalle = "✅", f"{o.n_escritas} nota(s) escritas"
-            else:
-                icono, detalle = "🧪", f"{o.summary.cambios} nota(s) se escribirían"
+            icono, detalle = {
+                "error": ("❌", o.error),
+                "freno": ("🛑", o.verdict.reason),
+                "ensayo": ("🧪", f"{o.n_escritas} nota(s) se habrían escrito"),
+                "escrito": ("✅", f"{o.n_escritas} nota(s) escritas"),
+                "prueba": ("🧪", f"{o.summary.cambios} nota(s) se escribirían"),
+            }[self._desenlace(o)]
             L.append(f"  {icono} {o.label}: {detalle}")
         return "\n".join(L)
 

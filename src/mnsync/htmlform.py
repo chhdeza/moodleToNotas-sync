@@ -45,21 +45,15 @@ class Form:
     """Un formulario ya cosechado, listo para reenviar."""
 
     action: str = ""
-    method: str = "post"
     #: Campos que se envían tal cual (ocultos, texto, casillas marcadas...).
     fields: dict[str, str] = field(default_factory=dict)
     #: Nombres de todas las casillas vistas, marcadas o no.
     checkboxes: dict[str, bool] = field(default_factory=dict)
     selects: dict[str, Select] = field(default_factory=dict)
 
-    def select(self, name: str) -> Select | None:
-        return self.selects.get(name)
-
-    def payload(self, **overrides: str) -> dict[str, str]:
-        """Los campos a enviar, con los cambios pedidos aplicados encima."""
-        data = dict(self.fields)
-        data.update({k: str(v) for k, v in overrides.items()})
-        return data
+    def payload(self) -> dict[str, str]:
+        """Una copia de los campos a enviar, para cambiarla sin tocar el formulario."""
+        return dict(self.fields)
 
 
 class _FormParser(HTMLParser):
@@ -81,10 +75,7 @@ class _FormParser(HTMLParser):
         a = {k.lower(): (v or "") for k, v in attrs}
 
         if tag == "form":
-            self._current = Form(
-                action=a.get("action", ""),
-                method=(a.get("method") or "post").lower(),
-            )
+            self._current = Form(action=a.get("action", ""))
             return
 
         if tag == "input":

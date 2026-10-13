@@ -24,7 +24,8 @@ from pathlib import Path
 
 from .config import Course, Credentials, Destination, MoodleGroupRef
 from .errors import MnsyncError
-from .moodle_export import MoodleSession
+from .moodle_export import Estudiante, MoodleSession, identidad
+from .sync import fetch_groups, plan_de, resolve_destinations, split_por_cu
 from .uploader import Uploader
 
 #: Cómo el script anuncia el emparejamiento de cada columna.
@@ -150,10 +151,8 @@ def verificar_contexto(
     Devuelve además el emparejamiento de columnas propuesto, porque se obtiene
     de la misma consulta y el asistente lo necesita en el paso siguiente.
     """
-    from .sync import fetch_groups, split_por_cu
-
     try:
-        exports = fetch_groups(course, creds, work_dir, groups=groups, session=session)
+        exports = fetch_groups(course, creds, groups=groups, session=session)
     except MnsyncError as e:
         return ContextCheck(ok=False, mensaje=e.mensaje, remedio=e.remedio or "")
 
@@ -172,10 +171,7 @@ def verificar_contexto(
     cus = tuple(sorted(xlsx_por_cu))
 
     uploader = Uploader(course, creds, work_dir)
-    destinos = (
-        [d for d in course.destinations if d.cu in xlsx_por_cu]
-        or uploader.discover_destinations(list(cus), xlsx_por_cu)
-    )
+    destinos = resolve_destinations(course, uploader, xlsx_por_cu)
 
     if not destinos:
         return ContextCheck(
@@ -201,9 +197,8 @@ def verificar_contexto(
     por_cu: dict[str, list[Destination]] = {}
     estudiantes_en: dict[tuple[str, int], int] = {}
 
-    for destino in destinos:
-        xlsx = xlsx_por_cu[destino.cu]
-        plan_path, res = uploader.plan(destino, [xlsx])
+    for destino, sondeado in destinos.items():
+        plan_path, res = plan_de(uploader, destino, sondeado, xlsx_por_cu)
         propias = uploader.cedulas_del_plan(plan_path)
         ubicadas |= propias
         estudiantes_en[destino.key] = len(propias)
@@ -213,10 +208,11 @@ def verificar_contexto(
         if not instrumentos:
             instrumentos = tuple(parse_instrument_matches(res.salida()))
 
-    todas = {c for ge in exports for c in ge.export.cedulas}
-    nombres = _nombres_por_cedula(exports)
-    cu_de = _cu_por_cedula(exports)
-    huerfanas = sorted(todas - ubicadas)
+    # Se cuenta a todos los que bajaron de Moodle, incluso a quien no trae
+    # centro universitario: no va a subir a ningún lado, y por eso mismo tiene
+    # que aparecer en la lista.
+    por_cedula = _por_cedula(exports)
+    huerfanas = sorted(set(por_cedula) - ubicadas)
 
     return ContextCheck(
         ok=True,
@@ -226,35 +222,17 @@ def verificar_contexto(
         destinos=tuple(destinos),
         cus=cus,
         instrumentos=instrumentos,
-        sin_destino=tuple(
-            (c, nombres.get(c, ""), cu_de.get(c, "")) for c in huerfanas
-        ),
+        sin_destino=tuple((c, por_cedula[c].nombre, por_cedula[c].cu) for c in huerfanas),
         por_cu=por_cu,
         estudiantes_en=estudiantes_en,
     )
 
 
-def _nombres_por_cedula(exports) -> dict[str, str]:
-    from .moodle_export import COL_APELLIDOS, COL_CEDULA, COL_NOMBRE
-
-    out: dict[str, str] = {}
+def _por_cedula(exports) -> dict[str, Estudiante]:
+    """Cada cédula descargada, con la primera fila en la que apareció."""
+    out: dict[str, Estudiante] = {}
     for ge in exports:
-        for row in ge.export.rows:
-            cedula = (row.get(COL_CEDULA) or "").strip()
-            if cedula:
-                nombre = f"{row.get(COL_NOMBRE, '')} {row.get(COL_APELLIDOS, '')}".strip()
-                out.setdefault(cedula, nombre)
-    return out
-
-
-def _cu_por_cedula(exports) -> dict[str, str]:
-    from .moodle_export import COL_CEDULA, COL_INSTITUCION
-    from .uploader import cu_de_institucion
-
-    out: dict[str, str] = {}
-    for ge in exports:
-        for row in ge.export.rows:
-            cedula = (row.get(COL_CEDULA) or "").strip()
-            if cedula:
-                out.setdefault(cedula, cu_de_institucion(row.get(COL_INSTITUCION) or ""))
+        for est in map(identidad, ge.export.rows):
+            if est.cedula:
+                out.setdefault(est.cedula, est)
     return out

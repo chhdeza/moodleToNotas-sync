@@ -14,6 +14,8 @@ después de que nunca subió nada.
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -35,10 +37,22 @@ from PySide6.QtWidgets import (
 )
 
 from .. import credstore
-from ..config import Course, Credentials, MoodleGroupRef, NotasParcialesCtx, Policy
-from ..discovery import ContextCheck
-from ..moodle_export import MoodleCourse, MoodleGroup
-from .tareas import Fallo, Tarea
+from ..config import (
+    MOODLE_URL_DEFAULT,
+    NP_BASE_URL_DEFAULT,
+    Course,
+    Credentials,
+    MoodleGroupRef,
+    NotasParcialesCtx,
+    Policy,
+    load_config,
+    load_credentials,
+    write_config,
+)
+from ..discovery import ContextCheck, verificar_contexto
+from ..errors import MnsyncError
+from ..moodle_export import MoodleCourse, MoodleGroup, MoodleSession
+from .tareas import Fallo, Tarea, lanzar
 
 
 @dataclass
@@ -103,13 +117,12 @@ class PasoBase(QWizardPage):
         self._ocupado = True
         self.estado.setText(mientras)
         self.completeChanged.emit()
-
-        tarea = Tarea(funcion, *args)
-        tarea.terminada.connect(lambda r: self._listo(r, al_terminar))
-        tarea.fallada.connect(self._error)
-        tarea.finished.connect(tarea.deleteLater)
-        self._tarea = tarea
-        tarea.start()
+        self._tarea = lanzar(
+            funcion,
+            *args,
+            al_terminar=lambda r: self._listo(r, al_terminar),
+            al_fallar=self._error,
+        )
 
     def _listo(self, resultado, al_terminar) -> None:
         self._ocupado = False
@@ -127,10 +140,41 @@ class PasoBase(QWizardPage):
         return self._ocupado
 
 
+class PasoVerificable(PasoBase):
+    """
+    Un paso que solo deja avanzar después de comprobarse contra el servidor.
+
+    Cualquier cambio en lo escrito borra la comprobación: lo comprobado antes
+    ya no vale para lo de ahora.
+    """
+
+    def __init__(self, borrador: Borrador, texto_boton: str) -> None:
+        super().__init__(borrador)
+        self._verificado = False
+        self.boton = QPushButton(texto_boton)
+        self.boton.clicked.connect(self._comprobar)
+
+    def _comprobar(self) -> None:  # pragma: no cover - lo define cada paso
+        raise NotImplementedError
+
+    def _error(self, fallo: Fallo) -> None:
+        self.boton.setEnabled(True)
+        super()._error(fallo)
+
+    def _olvidar_comprobacion(self) -> None:
+        if self._verificado:
+            self._verificado = False
+            self.estado.setText("")
+            self.completeChanged.emit()
+
+    def isComplete(self) -> bool:
+        return self._verificado and not self.ocupado
+
+
 # ---------------------------------------------------------------------------
 # Paso 1 — credenciales
 # ---------------------------------------------------------------------------
-class PasoCredenciales(PasoBase):
+class PasoCredenciales(PasoVerificable):
     """
     Usuario y contraseña de los dos sistemas, comprobados antes de seguir.
 
@@ -140,7 +184,7 @@ class PasoCredenciales(PasoBase):
     """
 
     def __init__(self, borrador: Borrador) -> None:
-        super().__init__(borrador)
+        super().__init__(borrador, "Comprobar que funcionan")
         self.setTitle("Tus dos cuentas")
         self.setSubTitle(
             "La de Moodle, con la que calificás, y la del SSO de la UNED, "
@@ -191,9 +235,6 @@ class PasoCredenciales(PasoBase):
         form.addRow(explicacion)
         form.addRow("Cédula:", self.tutor)
 
-        self.boton = QPushButton("Comprobar que funcionan")
-        self.boton.clicked.connect(self._comprobar)
-
         caja = QVBoxLayout(self)
         caja.addLayout(form)
         caja.addWidget(self.recordar)
@@ -206,7 +247,6 @@ class PasoCredenciales(PasoBase):
         ):
             campo.textChanged.connect(self._olvidar_comprobacion)
 
-        self._verificado = False
         self._precargar()
 
     def _comprobar(self) -> None:
@@ -275,10 +315,6 @@ class PasoCredenciales(PasoBase):
         )
         self.estado.setText("✓ " + detalle + guardadas)
 
-    def _error(self, fallo: Fallo) -> None:
-        self.boton.setEnabled(True)
-        super()._error(fallo)
-
     def _precargar(self) -> None:
         """Si ya hay credenciales guardadas, no hacérselas escribir de nuevo."""
         moodle = credstore.leer(credstore.SERVICIO_MOODLE)
@@ -313,16 +349,6 @@ class PasoCredenciales(PasoBase):
             return
         if limpio.isdigit() and 9 <= len(limpio) <= 12:
             self.tutor.setText(limpio)
-
-    def _olvidar_comprobacion(self) -> None:
-        # Cambió una credencial: lo comprobado antes ya no vale para lo de ahora.
-        if self._verificado:
-            self._verificado = False
-            self.estado.setText("")
-            self.completeChanged.emit()
-
-    def isComplete(self) -> bool:
-        return self._verificado and not self.ocupado
 
     def validatePage(self) -> bool:
         return self._verificado
@@ -482,21 +508,14 @@ def _apodo(borrador: Borrador) -> str:
     que nombra los archivos de salida, así que se arma de lo que él reconoce
     —el nombre del curso en Moodle— y no del código interno de la asignatura.
     """
-    import re
-    import unicodedata
-
     crudo = borrador.curso_moodle.name if borrador.curso_moodle else "curso"
-    sin_tildes = "".join(
-        c for c in unicodedata.normalize("NFD", crudo.lower())
-        if unicodedata.category(c) != "Mn"
-    )
     # Se saltan «a», «de», «la», que no distinguen nada y alargan el apodo, y
     # los códigos: muchos cursos de Moodle se llaman «03622 Introducción a la
     # Ciberseguridad», y un apodo que empieza en «03622» no le dice nada a nadie
     # —que es exactamente lo que este nombre existe para evitar—.
     palabras = [
         p
-        for p in re.split(r"[^a-z0-9]+", sin_tildes)
+        for p in re.split(r"[^a-z0-9]+", _sin_tildes(crudo))
         if len(p) > 2 and not p.isdigit()
     ][:2]
     base = "-".join(palabras) or "curso"
@@ -513,22 +532,24 @@ def _parece_suyo(nombre_grupo: str, nombre_profesor: str) -> bool:
     nombre para marcarlo. Es una ayuda de presentación, no una regla: marcar de
     más solo cuesta un clic, y marcar de menos esconde un grupo entero.
     """
-    import unicodedata
 
     def limpiar(s: str) -> set[str]:
-        sin_tildes = "".join(
-            c for c in unicodedata.normalize("NFD", s.lower())
-            if unicodedata.category(c) != "Mn"
-        )
-        return {p for p in sin_tildes.replace(".", " ").split() if len(p) > 2}
+        return {p for p in _sin_tildes(s).replace(".", " ").split() if len(p) > 2}
 
     return bool(limpiar(nombre_grupo) & limpiar(nombre_profesor))
+
+
+def _sin_tildes(texto: str) -> str:
+    """En minúsculas y sin tildes, para comparar nombres como los escribe cada uno."""
+    return "".join(
+        c for c in unicodedata.normalize("NFD", texto.lower()) if unicodedata.category(c) != "Mn"
+    )
 
 
 # ---------------------------------------------------------------------------
 # Paso 3 — los códigos de la asignatura
 # ---------------------------------------------------------------------------
-class PasoCodigos(PasoBase):
+class PasoCodigos(PasoVerificable):
     """
     Los ocho códigos de la pantalla de Captura de Notas, verificados al instante.
 
@@ -551,7 +572,7 @@ class PasoCodigos(PasoBase):
     ]
 
     def __init__(self, borrador: Borrador) -> None:
-        super().__init__(borrador)
+        super().__init__(borrador, "Comprobar contra Notas Parciales")
         self.setTitle("Los datos de tu curso en Notas Parciales")
         self.setSubTitle(
             "Copialos de los menús de la página de Captura de Notas. "
@@ -567,14 +588,10 @@ class PasoCodigos(PasoBase):
             self.campos[clave] = campo
             form.addRow(etiqueta, campo)
 
-        self.boton = QPushButton("Comprobar contra Notas Parciales")
-        self.boton.clicked.connect(self._comprobar)
-
         caja = QVBoxLayout(self)
         caja.addLayout(form)
         caja.addWidget(self.boton)
         caja.addWidget(self.estado)
-        self._verificado = False
 
     def _comprobar(self) -> None:
         """
@@ -604,8 +621,11 @@ class PasoCodigos(PasoBase):
         self.borrador.course_id_local = _apodo(self.borrador)
 
         self.boton.setEnabled(False)
+        # Es una sola llamada porque produce de una vez todo lo que necesitan
+        # los dos pasos siguientes —el reparto y el emparejamiento de
+        # columnas—; repetirla costaría otra tanda de consultas al servidor.
         self.correr(
-            verificar,
+            verificar_contexto,
             self.borrador.a_course(),
             self.borrador.creds,
             self.wizard().work_dir,
@@ -628,10 +648,6 @@ class PasoCodigos(PasoBase):
         self._verificado = True
         self.estado.setText("✓ " + check.resumen)
 
-    def _error(self, fallo: Fallo) -> None:
-        self.boton.setEnabled(True)
-        super()._error(fallo)
-
     def valores(self) -> dict[str, str]:
         return {k: c.text().strip() for k, c in self.campos.items()}
 
@@ -643,15 +659,6 @@ class PasoCodigos(PasoBase):
             encargado=v["encargado"], modelo=int(v["modelo"] or 0),
             tipo=v["tipo"] or "O",
         )
-
-    def _olvidar_comprobacion(self) -> None:
-        if self._verificado:
-            self._verificado = False
-            self.estado.setText("")
-            self.completeChanged.emit()
-
-    def isComplete(self) -> bool:
-        return self._verificado and not self.ocupado
 
 
 # ---------------------------------------------------------------------------
@@ -806,14 +813,11 @@ class Asistente(QWizard):
         Es el objetivo del programa entero: que ese archivo exista sin que nadie
         haya tenido que abrirlo. Lo que se guarda son códigos y destinos —nunca
         contraseñas, ni la cédula del tutor, ni una sola de estudiante— porque
-        este archivo se comparte y se sube al repositorio (specs/002, R-15).
+        este archivo se comparte (specs/002, R-15).
 
         Si un curso con el mismo apodo ya estaba configurado, se reemplaza: es
         lo que uno espera al volver a correr el asistente sobre el mismo curso.
         """
-        from ..config import load_config, write_config
-        from ..errors import MnsyncError
-
         try:
             nuevo = self.borrador.a_course()
         except ValueError:
@@ -833,8 +837,6 @@ class Asistente(QWizard):
 
     def credenciales_del_paso(self, paso: PasoCredenciales) -> Credentials:
         """Arma unas credenciales con lo que hay escrito en el primer paso."""
-        from ..config import MOODLE_URL_DEFAULT, NP_BASE_URL_DEFAULT
-
         return Credentials(
             moodle_url=MOODLE_URL_DEFAULT,
             moodle_username=paso.moodle_usuario.text().strip(),
@@ -855,8 +857,6 @@ def _cedula_guardada() -> str:
     correr el asistente. Si no hay nada, se devuelve vacío y el paso la propone
     a partir del usuario de Moodle.
     """
-    from ..config import load_credentials
-
     try:
         return load_credentials(require=False).np_tutor
     except Exception:  # noqa: BLE001 - una precarga nunca puede romper la ventana
@@ -888,32 +888,10 @@ def probar_ingresos(creds: Credentials) -> list[MoodleCourse]:
     Se hace de una sola vez porque son la misma sesión: pedir la lista de
     cursos **es** la prueba de que el ingreso funcionó.
     """
-    from ..moodle_export import MoodleSession
-
-    sesion = MoodleSession(creds.moodle_url)
-    sesion.login(creds.moodle_username, creds.moodle_password)
-    return sesion.list_courses()
+    return MoodleSession.iniciar(creds).list_courses()
 
 
 def traer_grupos(creds: Credentials, course_id: int) -> list[MoodleGroup]:
     """Los grupos del curso, para que el profesor marque los suyos."""
-    from ..moodle_export import MoodleSession
+    return MoodleSession.iniciar(creds).list_groups(course_id)
 
-    sesion = MoodleSession(creds.moodle_url)
-    sesion.login(creds.moodle_username, creds.moodle_password)
-    return sesion.list_groups(course_id)
-
-
-def verificar(course: Course, creds: Credentials, work_dir: Path) -> ContextCheck:
-    """
-    El paso caro: baja de Moodle, sondea Notas Parciales y resuelve el reparto.
-
-    Es una sola llamada porque produce de una vez todo lo que necesitan los dos
-    pasos siguientes —el reparto y el emparejamiento de columnas—, y repetirla
-    costaría otra tanda de consultas al servidor para saber lo mismo.
-
-    No escribe nada: son todas operaciones de lectura.
-    """
-    from ..discovery import verificar_contexto
-
-    return verificar_contexto(course, creds, work_dir)

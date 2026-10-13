@@ -21,13 +21,17 @@ Dos rejas antes de devolver nada, las dos ruidosas a propósito:
 from __future__ import annotations
 
 import csv
+import html as _html
 import io
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 
+import openpyxl
 import requests
 
+from .config import Credentials
 from .errors import MoodleError, ScopeError
 from .htmlform import Form, find_form, find_select
 
@@ -38,6 +42,36 @@ COL_CEDULA = "Número de ID"
 COL_INSTITUCION = "Institución"
 
 COLUMNAS_IDENTIDAD = (COL_NOMBRE, COL_APELLIDOS, COL_CEDULA, COL_INSTITUCION)
+
+#: «DESAMPARADOS (42)» → «42» (specs/001, D-08).
+_RE_INSTITUCION = re.compile(r"\((\d{1,3})\)\s*$")
+
+
+def cu_de_institucion(valor: str) -> str:
+    """
+    Extrae el código de centro universitario de la columna «Institución».
+
+    Moodle la escribe siempre como ``DESAMPARADOS (42)`` (specs/001, D-08).
+    """
+    m = _RE_INSTITUCION.search(valor or "")
+    return m.group(1) if m else ""
+
+
+class Estudiante(NamedTuple):
+    """Quién es una fila de la exportación: cédula, centro universitario y nombre."""
+
+    cedula: str
+    cu: str
+    nombre: str
+
+
+def identidad(row: dict[str, str]) -> Estudiante:
+    """Lee de una fila de Moodle lo que identifica al estudiante."""
+    return Estudiante(
+        cedula=(row.get(COL_CEDULA) or "").strip(),
+        cu=cu_de_institucion(row.get(COL_INSTITUCION) or ""),
+        nombre=f"{row.get(COL_NOMBRE, '')} {row.get(COL_APELLIDOS, '')}".strip(),
+    )
 
 #: Otras columnas que Moodle puede exportar y que no son notas.
 COLUMNAS_NO_NOTA = frozenset(
@@ -92,8 +126,6 @@ _SERVICIO_CURSOS = "core_course_get_enrolled_courses_by_timeline_classification"
 
 def _texto_plano(html: str) -> str:
     """El texto de un enlace, sin etiquetas ni espacios de más."""
-    import html as _html
-
     return re.sub(r"\s+", " ", _html.unescape(_RE_ETIQUETA.sub(" ", html))).strip()
 
 
@@ -125,23 +157,12 @@ class GradeExport:
 
     headers: list[str]
     rows: list[dict[str, str]]
-    group_id: int
     #: Encabezados que son columnas de nota (todo lo que no es identidad).
     grade_headers: list[str] = field(default_factory=list)
 
     @property
     def cedulas(self) -> set[str]:
-        return {r.get(COL_CEDULA, "").strip() for r in self.rows if r.get(COL_CEDULA, "").strip()}
-
-    @property
-    def instituciones(self) -> list[str]:
-        """
-        La columna «Institución» de cada fila, en el orden en que vino.
-
-        De ahí sale el centro universitario de cada estudiante, que es lo que
-        acota la búsqueda de su destino (specs/001, D-08).
-        """
-        return [r.get(COL_INSTITUCION, "").strip() for r in self.rows]
+        return {e.cedula for e in map(identidad, self.rows) if e.cedula}
 
     def __len__(self) -> int:
         return len(self.rows)
@@ -162,6 +183,13 @@ class MoodleSession:
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "mnsync/0.1 (Moodle grade sync)"})
         self._logged_in = False
+
+    @classmethod
+    def iniciar(cls, creds: Credentials) -> MoodleSession:
+        """Una sesión ya autenticada con las credenciales del profesor."""
+        sesion = cls(creds.moodle_url)
+        sesion.login(creds.moodle_username, creds.moodle_password)
+        return sesion
 
     # --- autenticación ---------------------------------------------------
     def login(self, username: str, password: str) -> None:
@@ -417,7 +445,7 @@ class MoodleSession:
             )
 
         csv_text = self._post_export(form, course_id, group_id)
-        return self._parse_csv(csv_text, group_id)
+        return self._parse_csv(csv_text)
 
     def _assert_group_scope(self, html: str, course_id: int, group_id: int) -> None:
         """
@@ -497,7 +525,8 @@ class MoodleSession:
                 "Moodle devolvió una página web en vez del archivo de calificaciones.",
                 remedio=(
                     "Suele pasar cuando la sesión venció o falta un permiso. Probá de "
-                    "nuevo; si sigue, exportá a mano y usá la opción --from-xlsx."
+                    "nuevo; si sigue, probá el mismo paso a mano en Moodle: "
+                    "Calificaciones → Exportar → Archivo de texto."
                 ),
             )
 
@@ -511,7 +540,7 @@ class MoodleSession:
         return _decode_export(r.content)
 
     # --- lectura del CSV --------------------------------------------------
-    def _parse_csv(self, text: str, group_id: int) -> GradeExport:
+    def _parse_csv(self, text: str) -> GradeExport:
         text = text.lstrip("﻿")
         reader = csv.DictReader(io.StringIO(text))
         headers = [h.strip() for h in (reader.fieldnames or [])]
@@ -523,12 +552,7 @@ class MoodleSession:
         rows = [{(k or "").strip(): (v or "").strip() for k, v in raw.items()} for raw in reader]
         grade_headers = [h for h in headers if is_grade_column(h)]
 
-        return GradeExport(
-            headers=headers,
-            rows=rows,
-            group_id=group_id,
-            grade_headers=grade_headers,
-        )
+        return GradeExport(headers=headers, rows=rows, grade_headers=grade_headers)
 
 
 def _decode_export(raw: bytes) -> str:
@@ -597,14 +621,6 @@ def write_moodle_xlsx(
     profesor nombró a mano en ``item_map``, y si él dice que esa columna va a un
     instrumento, va.
     """
-    try:
-        import openpyxl
-    except ImportError:  # pragma: no cover - dependencia declarada
-        raise MoodleError(
-            "Falta la librería openpyxl.",
-            remedio="Ejecutá:  pip install -e .",
-        ) from None
-
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Calificaciones"

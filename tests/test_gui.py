@@ -346,10 +346,10 @@ def test_el_recuento_muestra_las_siete_acciones_aunque_den_cero():
     """
     texto = _texto_recuento([_fila("001", "upload")])
 
-    from mnsync.report import ACCIONES
+    from mnsync.acciones import etiqueta
 
     for accion in ORDEN_ACCIONES:
-        assert ACCIONES[accion][0] in texto
+        assert etiqueta(accion) in texto
     assert len(ORDEN_ACCIONES) == 7
 
 

@@ -30,10 +30,9 @@ from mnsync.config import load_config, load_credentials
 from mnsync.sync import aplicar, preparar
 from mnsync.uploader import escribir_plan_autorizado
 from tests.fixtures import moodle_html as fx
+from tests.fixtures.escenario import escribir_courses_yml, mock_moodle
 from tests.fixtures.gen import make_students
 
-BASE_MOODLE = "http://127.0.0.1:9/moodle"
-CURSO_MOODLE = 8067
 GRUPO_MOODLE = 38525
 COLUMNA = "Tarea 1 (Real)"
 INSTRUMENTO = "Tar1"
@@ -48,55 +47,6 @@ NOTA_PUESTA = 7.5
 # ---------------------------------------------------------------------------
 # Andamiaje
 # ---------------------------------------------------------------------------
-def escribir_courses_yml(tmp_path: Path, *, allow_update: bool = False) -> Path:
-    lineas = [
-        "courses:",
-        "  - id: curso-prueba",
-        "    moodle:",
-        f"      course_id: {CURSO_MOODLE}",
-        "      groups:",
-        f"        - id: {GRUPO_MOODLE}",
-        '          name: "Grupo 1"',
-        "    notas_parciales:",
-        '      ano: "2026"',
-        '      pac: "3"',
-        '      tipo: "O"',
-        '      asignatura: "00883"',
-        '      escuela: "03"',
-        "      catedra: 253",
-        "      encargado: ARODRIGUEZP",
-        "      modelo: 4",
-        "    destinos:",
-        f'      - cu: "{CU}"',
-        f"        grupo: {GRUPO_NP}",
-        "    policy:",
-        f"      allow_update: {'true' if allow_update else 'false'}",
-        "      justificacion_codigo: 2005",
-        "      max_changes: 40",
-    ]
-    p = tmp_path / "courses.yml"
-    p.write_text("\n".join(lineas) + "\n", encoding="utf-8")
-    return p
-
-
-def mock_moodle(rsps, csv_grupo: str) -> None:
-    rsps.add(responses.GET, f"{BASE_MOODLE}/login/index.php", body=fx.LOGIN_PAGE, status=200)
-    rsps.add(responses.POST, f"{BASE_MOODLE}/login/index.php", body=fx.LOGIN_OK, status=200)
-    rsps.add(
-        responses.GET,
-        f"{BASE_MOODLE}/grade/export/txt/index.php",
-        body=fx.export_page(
-            course_id=CURSO_MOODLE,
-            groups=[(GRUPO_MOODLE, "Grupo 1")],
-            selected_group=GRUPO_MOODLE,
-        ),
-        status=200,
-    )
-    rsps.add(
-        responses.POST, f"{BASE_MOODLE}/grade/export/txt/export.php", body=csv_grupo, status=200
-    )
-
-
 @pytest.fixture
 def poblacion(fake_np):
     """
@@ -124,8 +74,15 @@ def poblacion(fake_np):
 
 
 def preparar_corrida(tmp_path: Path, csv_grupo: str, *, allow_update: bool = False):
-    cfg = load_config(escribir_courses_yml(tmp_path, allow_update=allow_update))
-    mock_moodle(responses.mock, csv_grupo)
+    cfg = load_config(
+        escribir_courses_yml(
+            tmp_path,
+            grupos_moodle=[GRUPO_MOODLE],
+            destinos=[(CU, GRUPO_NP)],
+            allow_update=allow_update,
+        )
+    )
+    mock_moodle(responses.mock, {GRUPO_MOODLE: csv_grupo})
     return preparar(cfg.courses[0], load_credentials(), tmp_path / "salida")
 
 
