@@ -211,7 +211,8 @@ def test_html_en_vez_de_csv_se_reporta_como_sesion_vencida():
 
     with pytest.raises(MoodleError) as ex:
         _session().export_group(CURSO, GRUPO)
-    assert "--from-xlsx" in str(ex.value)
+    # El remedio lleva a un paso que existe: la exportación a mano en Moodle.
+    assert "Archivo de texto" in str(ex.value)
 
 
 # ---------------------------------------------------------------------------
@@ -328,7 +329,6 @@ def test_el_xlsx_no_lleva_correos_ni_totales(tmp_path):
                 "Tarea 1 (Real)": "80", "Total del curso (Real)": "80",
             }
         ],
-        group_id=1,
         grade_headers=["Tarea 1 (Real)"],
     )
 
@@ -356,7 +356,6 @@ def test_item_map_puede_rescatar_una_columna_excluida(tmp_path):
     export = GradeExport(
         headers=["Nombre", "Apellido(s)", "Número de ID", "Institución", "Total del curso (Real)"],
         rows=[],
-        group_id=1,
         grade_headers=[],
     )
 

@@ -24,8 +24,8 @@ la mitad de una sincronización (A-14).
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -43,28 +43,26 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..config import Config, Course, Credentials
+from ..acciones import ESCRITURA, ETIQUETAS, NUEVAS, REQUIEREN_ATENCION, etiqueta
+from ..config import Config, Course, Credentials, load_config, load_credentials, missing_credentials
 from ..errors import MnsyncError
-from ..report import ACCIONES, RunReport, write_report
-from ..sync import FilaPlan, Preparacion, aplicar, preparar
-from ..uploader import ACCION_SOBRESCRIBIRIA, Uploader, reja_verificada
-from .tareas import Fallo, Tarea
-
-#: El orden en que se cuentan las acciones del plan.
-#:
-#: Están **todas** las que el script sabe producir, incluidas las que dieron
-#: cero: la vista de diferencias no reduce el plan a «se sube» y «no se sube»
-#: (specs/003, A-10). Ver un cero al lado de «cambiaría una nota existente» es
-#: información, y de la que más tranquiliza.
-ORDEN_ACCIONES = (
-    "upload",
-    "mark_not_presented",
-    ACCION_SOBRESCRIBIRIA,
-    "review",
-    "skip_already_set",
-    "skip_retirado",
-    "skip_not_in_roster",
+from ..moodle_export import MoodleSession
+from ..report import RunReport, write_report
+from ..sync import (
+    FilaPlan,
+    Preparacion,
+    aplicar,
+    contar_interceptadas,
+    preparar,
+    ruta_diario,
 )
+from ..uploader import Uploader, parece_rechazo_de_credenciales, reja_verificada
+from .tareas import Fallo, Tarea, lanzar
+
+#: El orden en que se cuentan las acciones del plan: **todas**, incluidas las
+#: que dieron cero. Ver un cero al lado de «cambiaría una nota existente» es
+#: información, y de la que más tranquiliza (specs/003, A-10).
+ORDEN_ACCIONES = tuple(ETIQUETAS)
 
 #: Las columnas de la vista de diferencias.
 COLUMNAS = (
@@ -77,6 +75,7 @@ COLUMNAS = (
     "Qué pasaría",
     "Autorizo",
 )
+COL_AUTORIZO = COLUMNAS.index("Autorizo")
 
 #: Cómo se llaman los filtros de la vista, y qué acciones deja pasar cada uno.
 #:
@@ -84,8 +83,8 @@ COLUMNAS = (
 #: viene puesto, y los otros dos solo acercan la lupa.
 FILTROS: tuple[tuple[str, tuple[str, ...] | None], ...] = (
     ("Todo", None),
-    ("Solo lo que cambiaría", ("upload", "mark_not_presented", ACCION_SOBRESCRIBIRIA)),
-    ("Solo lo que hay que revisar", (ACCION_SOBRESCRIBIRIA, "review")),
+    ("Solo lo que cambiaría", ESCRITURA),
+    ("Solo lo que hay que revisar", REQUIEREN_ATENCION),
 )
 
 
@@ -219,6 +218,8 @@ class Ventana(QMainWindow):
         self._casillas: dict[tuple[str, str], QTableWidgetItem] = {}
         self._filas: list[FilaPlan] = []
         self.estado_ingresos: EstadoIngresos | None = None
+        self._escritura = False
+        self._trabajando = False
 
         self.setWindowTitle("mnsync — de Moodle a Notas Parciales")
         self._construir()
@@ -254,8 +255,8 @@ class Ventana(QMainWindow):
         self.recuento.setTextFormat(Qt.TextFormat.PlainText)
 
         self.ver = QComboBox()
-        for etiqueta, _ in FILTROS:
-            self.ver.addItem(etiqueta)
+        for nombre, _ in FILTROS:
+            self.ver.addItem(nombre)
         self.ver.currentIndexChanged.connect(self._repintar)
 
         filtro = QHBoxLayout()
@@ -366,7 +367,7 @@ class Ventana(QMainWindow):
         mismo servidor, y un programa que se contradice a sí mismo en pantalla
         no merece que se le crea ninguna de las dos cosas.
         """
-        estado = getattr(self, "estado_ingresos", None)
+        estado = self.estado_ingresos
         if estado is None or estado.np.ok or not prep.destinos:
             return
         estado.np.estado = OK
@@ -429,7 +430,6 @@ class Ventana(QMainWindow):
                 continue
             i = self.tabla.rowCount()
             self.tabla.insertRow(i)
-            etiqueta = ACCIONES.get(fila.accion, (fila.accion, ""))[0]
             for col, valor in enumerate(
                 (
                     fila.nombre or "(sin nombre)",
@@ -438,12 +438,12 @@ class Ventana(QMainWindow):
                     fila.destino.label,
                     nota_legible(fila.nota_remota),
                     nota_legible(fila.nota_local),
-                    etiqueta,
+                    etiqueta(fila.accion),
                 )
             ):
                 self.tabla.setItem(i, col, QTableWidgetItem(valor))
 
-            self.tabla.setItem(i, 7, self._casilla(fila, fila.clave in autorizadas))
+            self.tabla.setItem(i, COL_AUTORIZO, self._casilla(fila, fila.clave in autorizadas))
 
         self.tabla.blockSignals(False)
         self.tabla.resizeColumnsToContents()
@@ -481,7 +481,7 @@ class Ventana(QMainWindow):
         return item
 
     def _cambio_de_autorizacion(self, item: QTableWidgetItem) -> None:
-        if item.column() == 7:
+        if item.column() == COL_AUTORIZO:
             self._actualizar_boton()
 
     def autorizadas(self) -> set[tuple[str, str]]:
@@ -603,8 +603,6 @@ class Ventana(QMainWindow):
         guardado una contraseña nueva, y seguir usando la vieja daría un fallo
         que ya sabemos explicar mejor.
         """
-        from ..config import load_config, load_credentials
-
         try:
             self.ctx.config = load_config()
         except MnsyncError as e:
@@ -634,13 +632,13 @@ class Ventana(QMainWindow):
     def _correr(self, funcion, *args, al_terminar=None, mientras: str, **kwargs) -> None:
         self._ocupada(True)
         self.estado.setText(mientras)
-
-        tarea = Tarea(funcion, *args, **kwargs)
-        tarea.terminada.connect(lambda r: self._listo(r, al_terminar))
-        tarea.fallada.connect(self._fallo)
-        tarea.finished.connect(tarea.deleteLater)
-        self._tarea = tarea
-        tarea.start()
+        self._tarea = lanzar(
+            funcion,
+            *args,
+            al_terminar=lambda r: self._listo(r, al_terminar),
+            al_fallar=self._fallo,
+            **kwargs,
+        )
 
     def _listo(self, resultado, al_terminar) -> None:
         self._ocupada(False)
@@ -661,7 +659,7 @@ class Ventana(QMainWindow):
             self.boton_sync.setEnabled(False)
             self.boton_ensayo.setEnabled(False)
         else:
-            self.boton_ensayo.setEnabled(getattr(self, "_escritura", False))
+            self.boton_ensayo.setEnabled(self._escritura)
         self._actualizar_boton()
 
     def _permitir_escritura(self, permitir: bool) -> None:
@@ -670,9 +668,7 @@ class Ventana(QMainWindow):
         self._actualizar_boton()
 
     def _actualizar_boton(self) -> None:
-        permitir = getattr(self, "_escritura", False) and not getattr(
-            self, "_trabajando", False
-        )
+        permitir = self._escritura and not self._trabajando
         self.boton_sync.setEnabled(permitir)
         marcadas = len(self.autorizadas()) if permitir else 0
         self.boton_sync.setText(
@@ -728,14 +724,11 @@ def _texto_recuento(filas: list[FilaPlan]) -> str:
     se lea como «se sube o no se sube» (specs/003, A-10): el profesor ve el
     vocabulario completo del sistema y dónde cayó lo suyo dentro de él.
     """
-    conteo: dict[str, int] = {}
-    for f in filas:
-        conteo[f.accion] = conteo.get(f.accion, 0) + 1
+    conteo = Counter(f.accion for f in filas)
 
     lineas = [f"{len(filas)} fila(s) en total:"]
     for accion in ORDEN_ACCIONES:
-        etiqueta = ACCIONES.get(accion, (accion, ""))[0]
-        lineas.append(f"    {conteo.get(accion, 0):>4}  {etiqueta}")
+        lineas.append(f"    {conteo[accion]:>4}  {etiqueta(accion)}")
 
     otras = sorted(set(conteo) - set(ORDEN_ACCIONES))
     lineas += [f"    {conteo[a]:>4}  {a}" for a in otras]
@@ -753,7 +746,7 @@ def texto_confirmacion(
     tener que entrar a la página de la UNED a arreglar un error decide distinto
     que uno que cree que hay un botón para volver atrás.
     """
-    nuevas = sum(1 for f in filas if f.accion in ("upload", "mark_not_presented"))
+    nuevas = sum(1 for f in filas if f.accion in NUEVAS)
     resumen = [f"Se van a escribir {nuevas} nota(s) nuevas."]
 
     pendientes = sum(1 for f in filas if f.es_sobrescritura)
@@ -783,11 +776,10 @@ def _texto_aviso(prep: Preparacion) -> str:
     for o in prep.fallidos:
         partes.append(f"❌ {o.label}: {o.error}")
 
-    huerfanos = sorted(prep.routing.sin_destino())
+    huerfanos = prep.routing.sin_destino_detalle()
     if huerfanos:
         nombres = "\n".join(
-            f"    · {prep.routing.nombres.get(c) or '(sin nombre)'}  —  {c}"
-            for c in huerfanos
+            f"    · {nombre or '(sin nombre)'}  —  {cedula}" for cedula, nombre, _ in huerfanos
         )
         partes.append(
             f"⚠ {len(huerfanos)} estudiante(s) están en Moodle pero no en ningún "
@@ -819,10 +811,6 @@ def revisar_ingresos(
 
     Ninguna de las dos escribe nada.
     """
-    from ..config import missing_credentials
-    from ..moodle_export import MoodleSession
-    from ..uploader import parece_rechazo_de_credenciales
-
     faltan = tuple(missing_credentials(creds))
     if faltan:
         return EstadoIngresos(faltan=faltan)
@@ -830,8 +818,7 @@ def revisar_ingresos(
     estado = EstadoIngresos()
 
     try:
-        sesion = MoodleSession(creds.moodle_url)
-        sesion.login(creds.moodle_username, creds.moodle_password)
+        MoodleSession.iniciar(creds)
         estado.moodle.estado = OK
     except MnsyncError as e:
         _anotar(estado.moodle, e, rechazo="rechaz" in e.mensaje.lower())
@@ -879,9 +866,7 @@ def ensayar_corrida(
     reja que no se puede verificar no es una reja.
     """
     work_dir.mkdir(parents=True, exist_ok=True)
-    # Mismo nombre que el de la terminal: lo cubre el .gitignore y lo lee
-    # «mnsync leer-ensayo» sin tener que enseñar un segundo patrón.
-    diario = work_dir / f"rehearsal_{prep.course.id}_{datetime.now():%Y%m%d_%H%M}.jsonl"
+    diario = ruta_diario(work_dir, prep.course.id)
 
     if not reja_verificada(work_dir):
         raise MnsyncError(
@@ -895,9 +880,4 @@ def ensayar_corrida(
     with prep.uploader.reja_de_escritura(diario):
         report = aplicar(prep, commit=True, autorizadas=autorizadas)
 
-    interceptadas = (
-        sum(1 for ln in diario.read_text(encoding="utf-8").splitlines() if ln.strip())
-        if diario.exists()
-        else 0
-    )
-    return Ensayo(report=report, diario=diario, interceptadas=interceptadas)
+    return Ensayo(report=report, diario=diario, interceptadas=contar_interceptadas(diario))

@@ -12,8 +12,10 @@ las conocen de ahí:
 from __future__ import annotations
 
 import argparse
+import getpass
+import json
+import os
 import sys
-from datetime import datetime
 from pathlib import Path
 
 from . import __version__, credstore
@@ -21,9 +23,9 @@ from ._uploader_shim import vendor_script
 from .config import Config, Course, Credentials, load_config, load_credentials, missing_credentials
 from .discovery import verificar_contexto
 from .errors import MnsyncError
-from .moodle_export import MoodleSession
+from .moodle_export import MoodleSession, write_moodle_xlsx
 from .report import write_report
-from .sync import fetch_groups, sync_course
+from .sync import contar_interceptadas, fetch_groups, ruta_diario, sync_course
 from .uploader import reja_verificada
 
 ANCHO = 70
@@ -53,16 +55,23 @@ def _work_dir(args: argparse.Namespace) -> Path:
     return Path(args.out or "salida").resolve()
 
 
+def _config(args: argparse.Namespace) -> Config:
+    return load_config(Path(args.config) if args.config else None)
+
+
 def _cargar(args: argparse.Namespace) -> tuple[Config, Credentials]:
-    cfg = load_config(Path(args.config) if args.config else None)
-    creds = load_credentials()
-    return cfg, creds
+    return _config(args), load_credentials()
 
 
 def _grupos_pedidos(course: Course, args: argparse.Namespace):
     if not getattr(args, "group", None):
         return None
     return [course.group_by_moodle_id(int(args.group))]
+
+
+def _allow_update(args: argparse.Namespace) -> bool | None:
+    """``--allow-update`` autoriza; sin él, decide la política del curso."""
+    return True if getattr(args, "allow_update", False) else None
 
 
 def _origen_de_credenciales() -> str:
@@ -73,8 +82,6 @@ def _origen_de_credenciales() -> str:
     contraseña en un lado y el programa la está tomando del otro, este renglón
     es lo único que lo explica.
     """
-    import os
-
     if os.environ.get("MOODLE_PASSWORD"):
         if Path(".env").exists():
             return "del archivo .env o del entorno"
@@ -121,7 +128,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     # 3. courses.yml
     cfg = None
     try:
-        cfg = load_config(Path(args.config) if args.config else None)
+        cfg = _config(args)
         print(f" ✓ Configuración válida: {len(cfg.courses)} curso(s)")
         for c in cfg.courses:
             print(f"     · {c.id}: curso Moodle {c.moodle_course_id}, {len(c.groups)} grupo(s)")
@@ -142,8 +149,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         print()
         print(" Probando conexión con Moodle...")
         try:
-            s = MoodleSession(creds.moodle_url)
-            s.login(creds.moodle_username, creds.moodle_password)
+            MoodleSession.iniciar(creds)
             print(" ✓ Moodle responde y aceptó las credenciales")
         except MnsyncError as e:
             print(f" ✗ Moodle: {e.mensaje}")
@@ -182,8 +188,6 @@ def cmd_credenciales(args: argparse.Namespace) -> int:
     vez de en un archivo de texto que cualquier carpeta sincronizada puede
     llevarse a la nube.
     """
-    import getpass
-
     titulo("CREDENCIALES GUARDADAS EN EL SISTEMA")
 
     if not credstore.disponible():
@@ -276,11 +280,7 @@ def cmd_cursos(args: argparse.Namespace) -> int:
     vacía o incompleta —depende del tema visual de Moodle— el número se puede
     escribir a mano igual.
     """
-    creds = load_credentials()
-
-    s = MoodleSession(creds.moodle_url)
-    s.login(creds.moodle_username, creds.moodle_password)
-    cursos = s.list_courses()
+    cursos = MoodleSession.iniciar(load_credentials()).list_courses()
 
     titulo("TUS CURSOS EN MOODLE")
     print()
@@ -315,7 +315,7 @@ def cmd_cursos(args: argparse.Namespace) -> int:
 def _cursos_configurados(args: argparse.Namespace) -> set[int]:
     """Los course_id que ya están en courses.yml, si el archivo existe."""
     try:
-        cfg = load_config(Path(args.config) if args.config else None)
+        cfg = _config(args)
     except MnsyncError:
         return set()
     return {c.moodle_course_id for c in cfg.courses}
@@ -328,9 +328,7 @@ def cmd_groups(args: argparse.Namespace) -> int:
     cfg, creds = _cargar(args)
     course = cfg.course(args.course)
 
-    s = MoodleSession(creds.moodle_url)
-    s.login(creds.moodle_username, creds.moodle_password)
-    grupos = s.list_groups(course.moodle_course_id)
+    grupos = MoodleSession.iniciar(creds).list_groups(course.moodle_course_id)
 
     titulo(f"GRUPOS DEL CURSO {course.moodle_course_id} EN MOODLE")
     if not grupos:
@@ -379,12 +377,17 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     work = _work_dir(args)
 
     titulo(f"DESCARGA DE NOTAS — {course.id}")
-    exports = fetch_groups(course, creds, work, groups=_grupos_pedidos(course, args))
+    exports = fetch_groups(course, creds, groups=_grupos_pedidos(course, args))
 
     print()
     for ge in exports:
+        xlsx = write_moodle_xlsx(
+            ge.export,
+            work / f"calificaciones_{course.id}_{ge.group.slug}.xlsx",
+            conservar=set(course.item_map),
+        )
         print(f" ✓ {ge.group.label}: {len(ge.export)} estudiante(s)")
-        print(f"     · {ge.xlsx.name}")
+        print(f"     · {xlsx.name}")
         if ge.export.grade_headers:
             print(f"     · columnas de nota: {', '.join(ge.export.grade_headers)}")
     print("=" * ANCHO)
@@ -504,7 +507,7 @@ def _ejecutar(args: argparse.Namespace, *, commit: bool, fence: Path | None = No
         work,
         commit=commit,
         groups=_grupos_pedidos(course, args),
-        allow_update=True if getattr(args, "allow_update", False) else None,
+        allow_update=_allow_update(args),
         fence_journal=fence,
     )
 
@@ -575,7 +578,7 @@ def cmd_rehearse(args: argparse.Namespace) -> int:
     work = _work_dir(args)
     work.mkdir(parents=True, exist_ok=True)
 
-    diario = work / f"rehearsal_{course.id}_{datetime.now():%Y%m%d_%H%M}.jsonl"
+    diario = ruta_diario(work, course.id)
 
     titulo(f"ENSAYO — {course.id}")
     print()
@@ -599,14 +602,14 @@ def cmd_rehearse(args: argparse.Namespace) -> int:
         work,
         commit=True,  # recorre el camino de escritura completo...
         groups=_grupos_pedidos(course, args),
-        allow_update=True if getattr(args, "allow_update", False) else None,
+        allow_update=_allow_update(args),
         fence_journal=diario,  # ...pero la reja intercepta cada envío
     )
 
     print()
     print(report.to_console())
     print()
-    interceptadas = _contar_lineas(diario)
+    interceptadas = contar_interceptadas(diario)
     print(f" Escrituras interceptadas: {interceptadas}")
 
     if not interceptadas:
@@ -642,12 +645,6 @@ def cmd_rehearse(args: argparse.Namespace) -> int:
     return 0
 
 
-def _contar_lineas(path: Path) -> int:
-    if not path.exists():
-        return 0
-    return sum(1 for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip())
-
-
 # ---------------------------------------------------------------------------
 # leer-ensayo
 # ---------------------------------------------------------------------------
@@ -658,8 +655,6 @@ def cmd_leer_ensayo(args: argparse.Namespace) -> int:
     Ese archivo es la pieza que más importa revisar antes de escribir de
     verdad, así que tiene que poder leerse sin saber de JSON.
     """
-    import json
-
     ruta = Path(args.archivo)
     if not ruta.exists():
         raise MnsyncError(
@@ -667,7 +662,7 @@ def cmd_leer_ensayo(args: argparse.Namespace) -> int:
             remedio="Los diarios de ensayo quedan en la carpeta «salida» con el nombre rehearsal_*.jsonl",
         )
 
-    filas: list[tuple[str, str, str, str, str]] = []
+    filas: list[tuple[str, str, str, str]] = []
     for linea in ruta.read_text(encoding="utf-8").splitlines():
         if not linea.strip():
             continue
@@ -690,7 +685,7 @@ def cmd_leer_ensayo(args: argparse.Namespace) -> int:
             )
         except (KeyError, IndexError, TypeError, ValueError):
             continue
-        filas.append((f"{cu}/{num}", cedula, instrumento, valor, ""))
+        filas.append((f"{cu}/{num}", cedula, instrumento, valor))
 
     titulo(f"ENSAYO — {ruta.name}")
     print()
@@ -707,7 +702,7 @@ def cmd_leer_ensayo(args: argparse.Namespace) -> int:
     print()
     print(f"   {'CU/Grupo':<10} {'Cédula':<14} {'Instrumento':<14} {'Nota'}")
     print(f"   {'-' * 10} {'-' * 14} {'-' * 14} {'-' * 12}")
-    for destino, cedula, instrumento, valor, _ in filas:
+    for destino, cedula, instrumento, valor in filas:
         print(f"   {destino:<10} {cedula:<14} {instrumento:<14} {valor}")
     print("=" * ANCHO)
 
@@ -739,6 +734,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = p.add_subparsers(dest="cmd", required=True)
 
+    # Las opciones que comparten los comandos que trabajan sobre un curso.
+    con_curso = argparse.ArgumentParser(add_help=False)
+    con_curso.add_argument("--course", required=True, help="id del curso en courses.yml")
+    con_grupo = argparse.ArgumentParser(add_help=False, parents=[con_curso])
+    con_grupo.add_argument("--group", help="Limitar a un grupo de Moodle")
+
     d = sub.add_parser("doctor", help="¿Está todo bien configurado?")
     d.add_argument("--offline", action="store_true", help="No probar la conexión")
     d.set_defaults(func=cmd_doctor)
@@ -754,31 +755,27 @@ def build_parser() -> argparse.ArgumentParser:
     cu = sub.add_parser("cursos", help="Ver tus cursos de Moodle con su número")
     cu.set_defaults(func=cmd_cursos)
 
-    g = sub.add_parser("groups", help="Ver los grupos del curso en Moodle")
-    g.add_argument("--course", required=True, help="id del curso en courses.yml")
+    g = sub.add_parser("groups", parents=[con_curso], help="Ver los grupos del curso en Moodle")
     g.set_defaults(func=cmd_groups)
 
-    f = sub.add_parser("fetch", help="Descargar las notas de Moodle (sin subir nada)")
-    f.add_argument("--course", required=True)
-    f.add_argument("--group", help="Limitar a un grupo de Moodle")
+    f = sub.add_parser(
+        "fetch", parents=[con_grupo], help="Descargar las notas de Moodle (sin subir nada)"
+    )
     f.set_defaults(func=cmd_fetch)
 
     de = sub.add_parser(
         "destinos",
+        parents=[con_grupo],
         help="Ver a qué grupos de Notas Parciales van tus estudiantes",
     )
-    de.add_argument("--course", required=True)
-    de.add_argument("--group", help="Limitar a un grupo de Moodle")
     de.set_defaults(func=cmd_destinos)
 
-    pl = sub.add_parser("plan", help="Ver qué se subiría, sin escribir nada")
-    pl.add_argument("--course", required=True)
-    pl.add_argument("--group", help="Limitar a un grupo de Moodle")
+    pl = sub.add_parser("plan", parents=[con_grupo], help="Ver qué se subiría, sin escribir nada")
     pl.set_defaults(func=cmd_plan)
 
-    s = sub.add_parser("sync", help="Sincronizar (con --commit escribe de verdad)")
-    s.add_argument("--course", required=True)
-    s.add_argument("--group", help="Limitar a un grupo de Moodle")
+    s = sub.add_parser(
+        "sync", parents=[con_grupo], help="Sincronizar (con --commit escribe de verdad)"
+    )
     s.add_argument("--commit", action="store_true", help="Escribir de verdad en la UNED")
     s.add_argument(
         "--allow-update",
@@ -789,10 +786,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     r = sub.add_parser(
         "rehearse",
+        parents=[con_grupo],
         help="Ensayo contra el servidor real con la escritura interceptada",
     )
-    r.add_argument("--course", required=True)
-    r.add_argument("--group", help="Limitar a un grupo de Moodle")
     r.add_argument("--allow-update", action="store_true")
     r.set_defaults(func=cmd_rehearse)
 

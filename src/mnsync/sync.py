@@ -32,13 +32,17 @@ y esperar a que el profesor autorice las sobrescrituras una por una
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
+from .acciones import SOBRESCRIBIRIA
 from .config import Course, Credentials, Destination, MoodleGroupRef
 from .errors import ConfigError, MnsyncError, ScopeError
 from .guard import (
     GuardVerdict,
+    PlanSummary,
     Routing,
     RoutingVerdict,
     check,
@@ -46,23 +50,9 @@ from .guard import (
     merge_routing,
     summarize_plan,
 )
-from .moodle_export import (
-    COL_APELLIDOS,
-    COL_CEDULA,
-    COL_INSTITUCION,
-    COL_NOMBRE,
-    GradeExport,
-    MoodleSession,
-    write_moodle_xlsx,
-)
+from .moodle_export import GradeExport, MoodleSession, identidad, write_moodle_xlsx
 from .report import DestinationOutcome, RunReport
-from .uploader import (
-    ACCION_SOBRESCRIBIRIA,
-    Uploader,
-    cu_de_institucion,
-    escribir_plan_autorizado,
-    leer_plan,
-)
+from .uploader import RunResult, Uploader, escribir_plan_autorizado, leer_plan
 
 
 @dataclass
@@ -71,13 +61,11 @@ class GroupExport:
 
     group: MoodleGroupRef
     export: GradeExport
-    xlsx: Path
 
 
 def fetch_groups(
     course: Course,
     creds: Credentials,
-    work_dir: Path,
     *,
     groups: list[MoodleGroupRef] | None = None,
     session: MoodleSession | None = None,
@@ -85,7 +73,11 @@ def fetch_groups(
     """
     Descarga las notas de cada grupo de Moodle y verifica que los alcances difieran.
 
-    Una sola sesión de Moodle para todos los grupos.
+    Una sola sesión de Moodle para todos los grupos. No escribe ningún archivo:
+    la corrida trabaja con los archivos por centro universitario
+    (``split_por_cu``), y solo ``mnsync fetch`` deja uno por grupo para abrirlo
+    en Excel. Un archivo con cédulas que nadie va a leer no tiene por qué
+    quedar en el disco.
     """
     objetivo = list(groups if groups is not None else course.groups)
     if not objetivo:
@@ -98,18 +90,12 @@ def fetch_groups(
         )
 
     if session is None:
-        session = MoodleSession(creds.moodle_url)
-        session.login(creds.moodle_username, creds.moodle_password)
+        session = MoodleSession.iniciar(creds)
 
-    exports: list[GroupExport] = []
-    for g in objetivo:
-        export = session.export_group(course.moodle_course_id, g.moodle_group_id)
-        xlsx = write_moodle_xlsx(
-            export,
-            work_dir / f"calificaciones_{course.id}_{g.slug}.xlsx",
-            conservar=set(course.item_map),
-        )
-        exports.append(GroupExport(group=g, export=export, xlsx=xlsx))
+    exports = [
+        GroupExport(g, session.export_group(course.moodle_course_id, g.moodle_group_id))
+        for g in objetivo
+    ]
 
     _assert_groups_are_distinct(exports)
     return exports
@@ -139,17 +125,6 @@ def _assert_groups_are_distinct(exports: list[GroupExport]) -> None:
                         "en Moodle y los identificadores de courses.yml. No se escribió nada."
                     ),
                 )
-
-
-def _cus_presentes(exports: list[GroupExport]) -> list[str]:
-    """Los centros universitarios que aparecen en las descargas, en orden estable."""
-    vistos: list[str] = []
-    for ge in exports:
-        for institucion in ge.export.instituciones:
-            cu = cu_de_institucion(institucion)
-            if cu and cu not in vistos:
-                vistos.append(cu)
-    return sorted(vistos)
 
 
 def split_por_cu(
@@ -185,24 +160,18 @@ def split_por_cu(
                 grade_headers.append(h)
 
         for row in ge.export.rows:
-            cedula = (row.get(COL_CEDULA) or "").strip()
-            cu = cu_de_institucion(row.get(COL_INSTITUCION) or "")
-            if not cedula or not cu:
+            est = identidad(row)
+            if not est.cedula or not est.cu:
                 continue
             # Un estudiante en dos grupos de Moodle se cuenta una sola vez.
-            if (cu, cedula) in vistas:
+            if (est.cu, est.cedula) in vistas:
                 continue
-            vistas.add((cu, cedula))
-            filas_por_cu.setdefault(cu, []).append(row)
+            vistas.add((est.cu, est.cedula))
+            filas_por_cu.setdefault(est.cu, []).append(row)
 
     salidas: dict[str, Path] = {}
     for cu, filas in filas_por_cu.items():
-        export = GradeExport(
-            headers=list(headers),
-            rows=filas,
-            group_id=0,
-            grade_headers=list(grade_headers),
-        )
+        export = GradeExport(headers=list(headers), rows=filas, grade_headers=list(grade_headers))
         salidas[cu] = write_moodle_xlsx(
             export,
             work_dir / f"calificaciones_{course_id}_cu{cu}.xlsx",
@@ -215,7 +184,7 @@ def resolve_destinations(
     course: Course,
     uploader: Uploader,
     xlsx_por_cu: dict[str, Path],
-) -> list[Destination]:
+) -> dict[Destination, tuple[Path, RunResult] | None]:
     """
     Los destinos a los que van a parar los estudiantes de esta corrida.
 
@@ -225,13 +194,22 @@ def resolve_destinations(
 
     Se ignoran los destinos declarados de centros universitarios que esta
     corrida no trajo: consultarlos sería tiempo perdido.
-    """
-    if course.destinations:
-        declarados = [d for d in course.destinations if d.cu in xlsx_por_cu]
-        if declarados:
-            return declarados
 
-    return uploader.discover_destinations(sorted(xlsx_por_cu), xlsx_por_cu)
+    Cada destino viene con su plan si el sondeo ya lo calculó, o con ``None``
+    si todavía hay que pedirlo: ``plan_de`` resuelve los dos casos.
+    """
+    declarados = {d: None for d in course.destinations if d.cu in xlsx_por_cu}
+    return declarados or uploader.discover_destinations(sorted(xlsx_por_cu), xlsx_por_cu)
+
+
+def plan_de(
+    uploader: Uploader,
+    destino: Destination,
+    sondeado: tuple[Path, RunResult] | None,
+    xlsx_por_cu: dict[str, Path],
+) -> tuple[Path, RunResult]:
+    """El plan de un destino: el que ya dejó el sondeo, o uno nuevo."""
+    return sondeado or uploader.plan(destino, [xlsx_por_cu[destino.cu]])
 
 
 @dataclass(frozen=True)
@@ -262,7 +240,7 @@ class FilaPlan:
 
     @property
     def es_sobrescritura(self) -> bool:
-        return self.accion == ACCION_SOBRESCRIBIRIA
+        return self.accion == SOBRESCRIBIRIA
 
 
 @dataclass
@@ -319,10 +297,6 @@ class Preparacion:
                 )
         return salida
 
-    def sobrescrituras(self) -> list[FilaPlan]:
-        """Las notas ya puestas que cambiarían. Cada una necesita su permiso."""
-        return [f for f in self.filas() if f.es_sobrescritura]
-
 
 def preparar(
     course: Course,
@@ -340,7 +314,7 @@ def preparar(
     veces como haga falta sin consecuencias.
     """
     # --- Fase A: recolectar y agrupar ---------------------------------------
-    exports = fetch_groups(course, creds, work_dir, groups=groups, session=session)
+    exports = fetch_groups(course, creds, groups=groups, session=session)
     xlsx_por_cu = split_por_cu(exports, work_dir, course.id, conservar=set(course.item_map))
 
     uploader = Uploader(course, creds, work_dir, fence_journal=fence_journal)
@@ -350,12 +324,9 @@ def preparar(
 
     planes: list[tuple[Destination, Path]] = []
     fallidos: list[DestinationOutcome] = []
-    for destino in destinos:
-        xlsx = xlsx_por_cu.get(destino.cu)
-        if xlsx is None:
-            continue
+    for destino, sondeado in destinos.items():
         try:
-            plan_path, _ = uploader.plan(destino, [xlsx])
+            plan_path, _ = plan_de(uploader, destino, sondeado, xlsx_por_cu)
         except MnsyncError as e:
             fallidos.append(
                 DestinationOutcome(
@@ -483,16 +454,13 @@ def _completar_con_moodle(routing: Routing, exports: list[GroupExport]) -> Routi
     sobre quién existe la tiene Moodle, no los planes.
     """
     for ge in exports:
-        for row in ge.export.rows:
-            cedula = (row.get(COL_CEDULA) or "").strip()
-            if not cedula:
+        for est in map(identidad, ge.export.rows):
+            if not est.cedula:
                 continue
-            cu = cu_de_institucion(row.get(COL_INSTITUCION) or "")
-            if cu:
-                routing.por_cu.setdefault(cu, set()).add(cedula)
-            nombre = f"{row.get(COL_NOMBRE, '')} {row.get(COL_APELLIDOS, '')}".strip()
-            if nombre:
-                routing.nombres.setdefault(cedula, nombre)
+            if est.cu:
+                routing.por_cu.setdefault(est.cu, set()).add(est.cedula)
+            if est.nombre:
+                routing.nombres.setdefault(est.cedula, est.nombre)
     return routing
 
 
@@ -514,10 +482,22 @@ def _sync_one_destination(
     subir.
     """
     propuesto = summarize_plan(plan_path, destination)
-    ejecutable, permitir = _plan_a_ejecutar(
-        plan_path, allow_update=allow_update, autorizadas=autorizadas
-    )
-    aplicado = propuesto if ejecutable == plan_path else summarize_plan(ejecutable, destination)
+
+    if autorizadas is None:
+        # La línea de comandos: se entrega el plan tal cual, y la bandera vale
+        # para todo el archivo.
+        ejecutable, aplicado, permitir = plan_path, propuesto, allow_update
+    else:
+        # Autorizaciones fila por fila: se escribe una copia recortada, y
+        # entonces la bandera global ya es exacta, porque solo puede alcanzar a
+        # las filas que quedaron adentro (specs/003, A-11). Se enciende
+        # únicamente si alguna sobrevivió, para que un plan sin sobrescrituras
+        # autorizadas ni siquiera pida el permiso.
+        ejecutable = escribir_plan_autorizado(
+            plan_path, autorizadas, plan_path.with_name(plan_path.stem + "_autorizado.csv")
+        )
+        aplicado = summarize_plan(ejecutable, destination)
+        permitir = aplicado.sobrescribirian > 0
 
     # El radio de daño se mide sobre lo que de verdad se va a escribir, no
     # sobre lo que el plan llegó a proponer: una sobrescritura que el profesor
@@ -557,41 +537,28 @@ def _sync_one_destination(
     )
 
 
-def _plan_a_ejecutar(
-    plan_path: Path,
-    *,
-    allow_update: bool,
-    autorizadas: set[tuple[str, str]] | None,
-) -> tuple[Path, bool]:
-    """
-    Qué archivo se le entrega al script, y con qué permiso de sobrescritura.
-
-    Sin autorizaciones fila por fila se entrega el plan tal cual: es la línea
-    de comandos, y ahí la bandera vale para todo el archivo.
-
-    Con autorizaciones se escribe una copia recortada, y entonces la bandera
-    global ya es exacta: solo puede alcanzar a las filas que quedaron adentro
-    (specs/003, A-11). Se enciende únicamente si alguna sobrevivió, para que un
-    plan sin sobrescrituras autorizadas ni siquiera pida el permiso.
-    """
-    if autorizadas is None:
-        return plan_path, allow_update
-
-    recortado = escribir_plan_autorizado(
-        plan_path,
-        autorizadas,
-        plan_path.with_name(plan_path.stem + "_autorizado.csv"),
-    )
-    quedan = any(f.get("accion") == ACCION_SOBRESCRIBIRIA for f in leer_plan(recortado))
-    return recortado, quedan
-
-
-def _resumen_vacio(destination: Destination):
+def _resumen_vacio(destination: Destination) -> PlanSummary:
     """Un resumen sin filas, para reportar un destino que ni llegó a planificar."""
-    from collections import Counter
-
-    from .guard import PlanSummary
-
     return PlanSummary(
         destination=destination, total=0, por_accion=Counter(), plan_path=Path("(sin plan)")
     )
+
+
+# ---------------------------------------------------------------------------
+# Ensayo
+# ---------------------------------------------------------------------------
+def ruta_diario(work_dir: Path, course_id: str) -> Path:
+    """
+    Dónde deja un ensayo lo que interceptó.
+
+    Es el mismo nombre desde la terminal y desde la ventana: lo cubre el
+    .gitignore y lo lee «mnsync leer-ensayo» sin tener que enseñar dos patrones.
+    """
+    return work_dir / f"rehearsal_{course_id}_{datetime.now():%Y%m%d_%H%M}.jsonl"
+
+
+def contar_interceptadas(diario: Path) -> int:
+    """Cuántas escrituras quedaron anotadas en el diario de un ensayo."""
+    if not diario.exists():
+        return 0
+    return sum(1 for ln in diario.read_text(encoding="utf-8").splitlines() if ln.strip())

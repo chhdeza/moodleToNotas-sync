@@ -28,14 +28,14 @@ frenos, que atienden dos accidentes distintos:
 
 from __future__ import annotations
 
-import csv
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .acciones import ESCRITURA, REVISAR, SIN_ROSTER, SOBRESCRIBIRIA, YA_ESTABA
 from .config import Destination, Policy
 from .errors import RoutingError
-from .uploader import ACCION_SIN_ROSTER, ACCIONES_DE_ESCRITURA
+from .uploader import leer_plan
 
 
 @dataclass
@@ -50,23 +50,23 @@ class PlanSummary:
     @property
     def cambios(self) -> int:
         """Filas que escribirían algo en el sistema de la UNED."""
-        return sum(self.por_accion[a] for a in ACCIONES_DE_ESCRITURA)
+        return sum(self.por_accion[a] for a in ESCRITURA)
 
     @property
     def fuera_de_roster(self) -> int:
-        return self.por_accion.get(ACCION_SIN_ROSTER, 0)
+        return self.por_accion.get(SIN_ROSTER, 0)
 
     @property
     def ya_estaban(self) -> int:
-        return self.por_accion.get("skip_already_set", 0)
+        return self.por_accion.get(YA_ESTABA, 0)
 
     @property
     def sobrescribirian(self) -> int:
-        return self.por_accion.get("would_overwrite", 0)
+        return self.por_accion.get(SOBRESCRIBIRIA, 0)
 
     @property
     def a_revisar(self) -> int:
-        return self.por_accion.get("review", 0)
+        return self.por_accion.get(REVISAR, 0)
 
     @property
     def propias(self) -> int:
@@ -107,6 +107,18 @@ class Routing:
         todas = {c for cedulas in self.por_cu.values() for c in cedulas}
         return todas - set(self.ubicados)
 
+    def sin_destino_detalle(self) -> list[tuple[str, str, str]]:
+        """
+        Quienes no aparecieron en ningún roster oficial, como ``(cédula, nombre, cu)``.
+
+        Es poco frecuente (specs/001, D-07), y justamente por eso cada uno
+        merece que se lo nombre.
+        """
+        cu_por_cedula = {c: cu for cu, cedulas in self.por_cu.items() for c in cedulas}
+        return sorted(
+            (c, self.nombres.get(c, ""), cu_por_cedula.get(c, "")) for c in self.sin_destino()
+        )
+
     def sin_destino_del_cu(self, cu: str) -> set[str]:
         return self.por_cu.get(cu, set()) - set(self.ubicados)
 
@@ -143,14 +155,12 @@ class RoutingVerdict:
 # ---------------------------------------------------------------------------
 def summarize_plan(plan_path: Path, destination: Destination) -> PlanSummary:
     """Cuenta las filas de un plan por acción."""
-    por_accion: Counter[str] = Counter()
-    total = 0
-    with plan_path.open("r", encoding="utf-8-sig", newline="") as f:
-        for row in csv.DictReader(f):
-            total += 1
-            por_accion[(row.get("accion") or "").strip()] += 1
+    filas = leer_plan(plan_path)
     return PlanSummary(
-        destination=destination, total=total, por_accion=por_accion, plan_path=plan_path
+        destination=destination,
+        total=len(filas),
+        por_accion=Counter(f.get("accion", "") for f in filas),
+        plan_path=plan_path,
     )
 
 
@@ -165,20 +175,17 @@ def merge_routing(planes: list[tuple[Destination, Path]]) -> Routing:
     routing = Routing()
 
     for destination, plan_path in planes:
-        with plan_path.open("r", encoding="utf-8-sig", newline="") as f:
-            for row in csv.DictReader(f):
-                cedula = (row.get("cedula") or "").strip()
-                if not cedula:
-                    continue
-                cu = (row.get("cu") or "").strip()
-                if cu:
-                    routing.por_cu.setdefault(cu, set()).add(cedula)
-                nombre = (row.get("nombre") or "").strip()
-                if nombre:
-                    routing.nombres.setdefault(cedula, nombre)
-                if (row.get("accion") or "").strip() != ACCION_SIN_ROSTER:
-                    _assert_un_solo_destino(routing, cedula, destination)
-                    routing.ubicados[cedula] = destination
+        for row in leer_plan(plan_path):
+            cedula = row.get("cedula", "")
+            if not cedula:
+                continue
+            if row.get("cu"):
+                routing.por_cu.setdefault(row["cu"], set()).add(cedula)
+            if row.get("nombre"):
+                routing.nombres.setdefault(cedula, row["nombre"])
+            if row.get("accion") != SIN_ROSTER:
+                _assert_un_solo_destino(routing, cedula, destination)
+                routing.ubicados[cedula] = destination
 
     return routing
 
@@ -271,11 +278,7 @@ def check_routing(routing: Routing) -> RoutingVerdict:
 
 
 def check(summary: PlanSummary, policy: Policy) -> GuardVerdict:
-    """Decide si este destino puede escribir."""
-    return _check_blast_radius(summary, policy)
-
-
-def _check_blast_radius(summary: PlanSummary, policy: Policy) -> GuardVerdict:
+    """Decide si este destino puede escribir: el freno de radio de daño."""
     if not policy.blast_radius_enabled or summary.cambios <= policy.max_changes:
         return GuardVerdict(allowed=True)
 

@@ -56,8 +56,8 @@ def traducir(error: BaseException) -> Fallo:
     return Fallo(
         mensaje="El programa se encontró con un problema que no esperaba.",
         remedio=(
-            "No se escribió nada. Probá de nuevo; si vuelve a pasar, usá "
-            "«Exportar diagnóstico» y mandá el archivo a quien mantiene el programa."
+            "No se escribió nada. Probá de nuevo; si vuelve a pasar, avisale a "
+            "quien mantiene el programa y contale qué estabas haciendo."
         ),
         detalle=f"{type(error).__name__}: {error}",
     )
@@ -89,3 +89,23 @@ class Tarea(QThread):
             self.fallada.emit(traducir(e))
         else:
             self.terminada.emit(resultado)
+
+
+def lanzar(
+    funcion: Callable[..., Any],
+    *args: Any,
+    al_terminar: Callable[[Any], None],
+    al_fallar: Callable[[Fallo], None],
+    **kwargs: Any,
+) -> Tarea:
+    """
+    Corre ``funcion`` en su propio hilo, con sus avisos ya conectados.
+
+    Devuelve la tarea para que quien la lanzó la conserve mientras corre.
+    """
+    tarea = Tarea(funcion, *args, **kwargs)
+    tarea.terminada.connect(al_terminar)
+    tarea.fallada.connect(al_fallar)
+    tarea.finished.connect(tarea.deleteLater)
+    tarea.start()
+    return tarea

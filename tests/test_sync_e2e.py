@@ -17,26 +17,19 @@ from pathlib import Path
 
 import responses
 
-from mnsync.cli import main as cli_main
 from tests.fake_np.state import NOTA_NO_PRESENTO, NOTA_RETIRADO
+from tests.fixtures import escenario
 from tests.fixtures import moodle_html as fx
+from tests.fixtures.escenario import correr, leer_planes, mock_moodle
 from tests.fixtures.gen import make_students
 
-BASE_MOODLE = "http://127.0.0.1:9/moodle"
-CURSO_MOODLE = 8067
 COLUMNA = "Tarea 1 (Real)"
 
 
 # ---------------------------------------------------------------------------
 # Andamiaje
 # ---------------------------------------------------------------------------
-def escribir_courses_yml(
-    tmp_path: Path,
-    grupos: list[tuple[int, str, int]],
-    *,
-    max_changes: int = 40,
-    allow_update: bool = False,
-) -> Path:
+def escribir_courses_yml(tmp_path: Path, grupos: list[tuple[int, str, int]], **kw) -> Path:
     """
     ``grupos``: lista de (moodle_group_id, cu, grupo_np).
 
@@ -44,80 +37,12 @@ def escribir_courses_yml(
     distintas, porque son cosas distintas: el grupo dice de quién son los
     estudiantes, el destino dónde se escriben sus notas (specs/001, D-11).
     """
-    lineas = [
-        "courses:",
-        "  - id: curso-prueba",
-        "    moodle:",
-        f"      course_id: {CURSO_MOODLE}",
-        "      groups:",
-    ]
-    for gid, _cu, gnum in grupos:
-        lineas += [f"        - id: {gid}", f'          name: "Grupo {gnum}"']
-    lineas += [
-        "    notas_parciales:",
-        '      ano: "2026"',
-        '      pac: "3"',
-        '      tipo: "O"',
-        '      asignatura: "00883"',
-        '      escuela: "03"',
-        "      catedra: 253",
-        "      encargado: ARODRIGUEZP",
-        "      modelo: 4",
-        "    destinos:",
-    ]
-    for _gid, cu, gnum in grupos:
-        lineas += [f'      - cu: "{cu}"', f"        grupo: {gnum}"]
-    lineas += [
-        "    policy:",
-        f"      allow_update: {'true' if allow_update else 'false'}",
-        "      justificacion_codigo: 2005",
-        f"      max_changes: {max_changes}",
-    ]
-    p = tmp_path / "courses.yml"
-    p.write_text("\n".join(lineas) + "\n", encoding="utf-8")
-    return p
-
-
-def mock_moodle(rsps, grupos_csv: dict[int, str], *, grupos_moodle=None):
-    """Simula Moodle: ingreso, página de exportación y descarga, por grupo."""
-    grupos_moodle = grupos_moodle or [(gid, f"Grupo {i+1}") for i, gid in enumerate(grupos_csv)]
-
-    rsps.add(responses.GET, f"{BASE_MOODLE}/login/index.php", body=fx.LOGIN_PAGE, status=200)
-    rsps.add(responses.POST, f"{BASE_MOODLE}/login/index.php", body=fx.LOGIN_OK, status=200)
-
-    def index_callback(request):
-        from urllib.parse import parse_qs, urlparse
-
-        qs = parse_qs(urlparse(request.url).query)
-        gid = int(qs.get("group", ["0"])[0])
-        return (
-            200,
-            {},
-            fx.export_page(
-                course_id=CURSO_MOODLE,
-                groups=grupos_moodle,
-                selected_group=gid if gid else None,
-            ),
-        )
-
-    rsps.add_callback(
-        responses.GET, f"{BASE_MOODLE}/grade/export/txt/index.php", callback=index_callback
+    return escenario.escribir_courses_yml(
+        tmp_path,
+        grupos_moodle=[gid for gid, _, _ in grupos],
+        destinos=[(cu, gnum) for _, cu, gnum in grupos],
+        **kw,
     )
-
-    def export_callback(request):
-        from urllib.parse import parse_qs
-
-        body = parse_qs(request.body or "")
-        gid = int((body.get("group") or ["0"])[0])
-        return (200, {}, grupos_csv.get(gid, ""))
-
-    rsps.add_callback(
-        responses.POST, f"{BASE_MOODLE}/grade/export/txt/export.php", callback=export_callback
-    )
-
-
-def correr(tmp_path: Path, cfg: Path, *args: str) -> int:
-    return cli_main(["--config", str(cfg), "--out", str(tmp_path / "salida"), *args])
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +85,7 @@ def test_matriz_completa_de_acciones(fake_np, tmp_path):
     cfg = escribir_courses_yml(tmp_path, [(38525, "42", 1)])
     assert correr(tmp_path, cfg, "plan", "--course", "curso-prueba") == 0
 
-    plan = _leer_plan(tmp_path)
+    plan = leer_planes(tmp_path)
     fallos = []
     for fila in plan:
         nombre_caso, esperado = caso_por_cedula[fila["cedula"]]
@@ -170,16 +95,6 @@ def test_matriz_completa_de_acciones(fake_np, tmp_path):
 
     # Un plan nunca escribe.
     assert fake_np.journal == []
-
-
-def _leer_plan(tmp_path: Path) -> list[dict[str, str]]:
-    import csv
-
-    planes = list((tmp_path / "salida").glob("notas_plan_*.csv"))
-    planes = [p for p in planes if "resultados" not in p.name]
-    assert planes, "no se generó ningún plan"
-    with planes[0].open(encoding="utf-8-sig", newline="") as f:
-        return [{k: (v or "").strip() for k, v in r.items()} for r in csv.DictReader(f)]
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +121,7 @@ def test_dry_run_dice_la_verdad(fake_np, tmp_path):
     assert correr(tmp_path, cfg, "sync", "--course", "curso-prueba") == 0
     anunciado = sorted(
         (f["cedula"], f["instrumento"], f["nota_local"])
-        for f in _leer_plan(tmp_path)
+        for f in leer_planes(tmp_path)
         if f["accion"] == "upload"
     )
     assert fake_np.journal == [], "el modo prueba escribió algo"
@@ -304,7 +219,7 @@ def test_correr_dos_veces_no_escribe_dos_veces(fake_np, tmp_path):
 
     assert correr(tmp_path, cfg, "sync", "--course", "curso-prueba", "--commit") == 0
     assert fake_np.journal == [], "la segunda corrida volvió a escribir"
-    assert all(f["accion"] == "skip_already_set" for f in _leer_plan(tmp_path))
+    assert all(f["accion"] == "skip_already_set" for f in leer_planes(tmp_path))
 
 
 # ---------------------------------------------------------------------------
@@ -328,7 +243,7 @@ def test_no_sobrescribe_sin_permiso_explicito(fake_np, tmp_path):
 
     assert correr(tmp_path, cfg, "sync", "--course", "curso-prueba", "--commit") == 0
     assert fake_np.journal == [], "sobrescribió una nota existente sin permiso"
-    assert all(f["accion"] == "would_overwrite" for f in _leer_plan(tmp_path))
+    assert all(f["accion"] == "would_overwrite" for f in leer_planes(tmp_path))
 
 
 @responses.activate

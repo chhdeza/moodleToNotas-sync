@@ -19,14 +19,8 @@ from mnsync.config import load_config, load_credentials
 from mnsync.discovery import InstrumentMatch, parse_instrument_matches, verificar_contexto
 from mnsync.moodle_export import MoodleSession
 from tests.fixtures import moodle_html as fx
-from tests.test_enrutamiento import (
-    GRUPO_A,
-    GRUPO_B,
-    Poblacion,
-    csv_de,
-    escribir_courses_yml,
-    mock_moodle,
-)
+from tests.fixtures.escenario import escribir_courses_yml, mock_moodle
+from tests.test_enrutamiento import GRUPO_A, GRUPO_B, Poblacion, csv_de
 
 BASE_MOODLE = "http://127.0.0.1:9/moodle"
 

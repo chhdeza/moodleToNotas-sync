@@ -19,6 +19,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import yaml
+from dotenv import load_dotenv
+
 from .errors import ConfigError
 
 # Valor por defecto del servidor real. Se puede redirigir a un servidor
@@ -87,14 +90,6 @@ def load_credentials(env_path: Path | None = None, *, require: bool = True) -> C
     ``mnsync doctor`` pueda decir *cuáles* faltan en vez de morir en la
     primera.
     """
-    try:
-        from dotenv import load_dotenv
-    except ImportError:  # pragma: no cover - dependencia declarada
-        raise ConfigError(
-            "Falta la librería python-dotenv.",
-            remedio="Ejecutá:  pip install -e .",
-        ) from None
-
     path = env_path or Path(".env")
     if path.exists():
         load_dotenv(path, override=False)
@@ -102,19 +97,15 @@ def load_credentials(env_path: Path | None = None, *, require: bool = True) -> C
     def get(name: str) -> str:
         return (os.environ.get(name) or "").strip()
 
+    # Lo del entorno, y si no hay, lo del almacén del sistema.
     guardadas = _credenciales_guardadas()
-
-    def con_respaldo(name: str, respaldo: str) -> str:
-        """Lo del entorno, y si no hay, lo del almacén del sistema."""
-        return get(name) or respaldo
-
     creds = Credentials(
         moodle_url=(get("MOODLE_URL") or MOODLE_URL_DEFAULT).rstrip("/"),
-        moodle_username=con_respaldo("MOODLE_USERNAME", guardadas["moodle_username"]),
-        moodle_password=con_respaldo("MOODLE_PASSWORD", guardadas["moodle_password"]),
-        np_user=con_respaldo("NP_NTLM_USER", guardadas["np_user"]),
-        np_password=con_respaldo("NP_NTLM_PASSWORD", guardadas["np_password"]),
-        np_tutor=con_respaldo("NP_TUTOR", guardadas["np_tutor"]),
+        moodle_username=get("MOODLE_USERNAME") or guardadas["moodle_username"],
+        moodle_password=get("MOODLE_PASSWORD") or guardadas["moodle_password"],
+        np_user=get("NP_NTLM_USER") or guardadas["np_user"],
+        np_password=get("NP_NTLM_PASSWORD") or guardadas["np_password"],
+        np_tutor=get("NP_TUTOR") or guardadas["np_tutor"],
         np_base_url=(get("NP_BASE_URL") or NP_BASE_URL_DEFAULT).rstrip("/"),
     )
 
@@ -489,14 +480,6 @@ def _parse_course(raw: Any, index: int) -> Course:
 
 def load_config(path: Path | None = None) -> Config:
     """Lee y valida ``courses.yml``."""
-    try:
-        import yaml
-    except ImportError:  # pragma: no cover - dependencia declarada
-        raise ConfigError(
-            "Falta la librería PyYAML.",
-            remedio="Ejecutá:  pip install -e .",
-        ) from None
-
     p = path or Path("courses.yml")
     if not p.exists():
         raise ConfigError(
@@ -551,8 +534,8 @@ def course_to_dict(course: Course) -> dict[str, Any]:
 
     Lo que **no** aparece acá es tan importante como lo que sí: ni credenciales,
     ni la cédula del tutor, ni una sola cédula de estudiante. Este archivo se
-    comparte y se sube al repositorio para que el flujo automático lo use, y lo
-    que entra al historial de git no sale nunca (specs/002, R-15).
+    comparte —con colegas, o como secreto del flujo automático—, y lo que sale
+    de la máquina del profesor ya no se puede recoger (specs/002, R-15).
 
     El enrutamiento individual no se guarda: se recalcula contra el servidor en
     cada corrida. Solo se conserva la lista de destinos, que no es un dato
@@ -600,14 +583,6 @@ def write_config(courses: tuple[Course, ...] | list[Course], path: Path) -> Path
     que llevan ceros a la izquierda: si «01» se guardara como número, volvería
     como «1» y el servidor devolvería tablas vacías sin dar ningún error.
     """
-    try:
-        import yaml
-    except ImportError:  # pragma: no cover - dependencia declarada
-        raise ConfigError(
-            "Falta la librería PyYAML.",
-            remedio="Ejecutá:  pip install -e .",
-        ) from None
-
     cuerpo = yaml.safe_dump(
         {"courses": [course_to_dict(c) for c in courses]},
         allow_unicode=True,
