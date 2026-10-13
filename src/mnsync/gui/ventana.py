@@ -29,13 +29,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -57,6 +60,7 @@ from ..sync import (
     ruta_diario,
 )
 from ..uploader import Uploader, parece_rechazo_de_credenciales, reja_verificada
+from .estilo import Mensaje, repintar, tinte
 from .tareas import Fallo, Tarea, lanzar
 
 #: El orden en que se cuentan las acciones del plan: **todas**, incluidas las
@@ -76,6 +80,9 @@ COLUMNAS = (
     "Autorizo",
 )
 COL_AUTORIZO = COLUMNAS.index("Autorizo")
+COL_ACCION = COLUMNAS.index("Qué pasaría")
+#: Las columnas que llevan una nota: van centradas, para compararlas de un vistazo.
+COLS_NOTA = (COLUMNAS.index("Ahora"), COLUMNAS.index("Quedaría"))
 
 #: Cómo se llaman los filtros de la vista, y qué acciones deja pasar cada uno.
 #:
@@ -227,11 +234,16 @@ class Ventana(QMainWindow):
 
     # --- construcción -----------------------------------------------------
     def _construir(self) -> None:
-        self.ingresos = QLabel("Comprobando tus contraseñas…")
-        self.ingresos.setWordWrap(True)
-        self.ingresos.setTextFormat(Qt.TextFormat.PlainText)
+        # Arriba, lo que hay que saber antes de nada: qué curso, y si las
+        # contraseñas siguen sirviendo.
+        titulo = QLabel("De Moodle a Notas Parciales")
+        titulo.setObjectName("titulo")
+
+        self.ingresos = Mensaje("Comprobando tus contraseñas…")
+        repintar(self.ingresos, "tono", "trabajando")
 
         self.cursos = QComboBox()
+        self.cursos.setMinimumWidth(280)
         self.cursos.currentIndexChanged.connect(self._cambio_de_curso)
 
         self.boton_revisar = QPushButton("Revisar de nuevo")
@@ -241,37 +253,72 @@ class Ventana(QMainWindow):
         self.boton_configurar.clicked.connect(self.configurar)
 
         arriba = QHBoxLayout()
-        arriba.addWidget(QLabel("Curso:"))
+        arriba.setSpacing(8)
+        arriba.addWidget(_rotulo("Curso", self.cursos))
         arriba.addWidget(self.cursos, 1)
         arriba.addWidget(self.boton_revisar)
         arriba.addWidget(self.boton_configurar)
 
-        self.aviso = QLabel("")
-        self.aviso.setWordWrap(True)
-        self.aviso.setTextFormat(Qt.TextFormat.PlainText)
+        cabecera = QFrame()
+        cabecera.setObjectName("cabecera")
+        caja_cabecera = QVBoxLayout(cabecera)
+        caja_cabecera.setContentsMargins(20, 16, 20, 16)
+        caja_cabecera.setSpacing(12)
+        caja_cabecera.addWidget(titulo)
+        caja_cabecera.addLayout(arriba)
+        caja_cabecera.addWidget(self.ingresos)
 
-        self.recuento = QLabel("")
-        self.recuento.setWordWrap(True)
-        self.recuento.setTextFormat(Qt.TextFormat.PlainText)
+        # En el medio, el plan: los frenos, el recuento y la tabla.
+        self.aviso = Mensaje()
+        self.recuento = Recuento()
 
         self.ver = QComboBox()
         for nombre, _ in FILTROS:
             self.ver.addItem(nombre)
         self.ver.currentIndexChanged.connect(self._repintar)
 
+        self.mostrando = QLabel("")
+        self.mostrando.setObjectName("rotulo")
+
         filtro = QHBoxLayout()
-        filtro.addWidget(QLabel("Ver:"))
-        filtro.addWidget(self.ver)
+        filtro.addWidget(self.mostrando)
         filtro.addStretch(1)
+        filtro.addWidget(_rotulo("Ver", self.ver))
+        filtro.addWidget(self.ver)
 
         self.tabla = QTableWidget(0, len(COLUMNAS))
         self.tabla.setHorizontalHeaderLabels(COLUMNAS)
         self.tabla.verticalHeader().setVisible(False)
+        self.tabla.verticalHeader().setDefaultSectionSize(34)
+        self.tabla.horizontalHeader().setDefaultAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.tabla.setAlternatingRowColors(True)
+        self.tabla.setShowGrid(False)
+        self.tabla.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.tabla.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.tabla.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.Stretch
         )
         self.tabla.itemChanged.connect(self._cambio_de_autorizacion)
+
+        medio = QVBoxLayout()
+        medio.setContentsMargins(20, 16, 20, 12)
+        medio.setSpacing(12)
+        medio.addWidget(self.aviso)
+        medio.addWidget(self.recuento)
+        medio.addLayout(filtro)
+        medio.addWidget(self.tabla, 1)
+
+        # Abajo, lo que está pasando y lo que se puede hacer al respecto. La
+        # barra se mueve mientras hay trabajo en curso: bajar de Moodle tarda
+        # minutos, y una ventana quieta durante minutos parece colgada.
+        self.progreso = QProgressBar()
+        self.progreso.setRange(0, 0)
+        self.progreso.setTextVisible(False)
+        self.progreso.setVisible(False)
+
+        self.estado = Mensaje()
 
         self.boton_ensayo = QPushButton("Probar sin escribir nada")
         self.boton_ensayo.setToolTip(
@@ -282,31 +329,36 @@ class Ventana(QMainWindow):
         self.boton_ensayo.clicked.connect(self.ensayar)
 
         self.boton_sync = QPushButton("Sincronizar")
+        self.boton_sync.setProperty("primario", "si")
         self.boton_sync.setDefault(True)
         self.boton_sync.clicked.connect(self.sincronizar)
 
         abajo = QHBoxLayout()
+        abajo.setSpacing(8)
         abajo.addWidget(self.boton_ensayo)
         abajo.addStretch(1)
         abajo.addWidget(self.boton_sync)
 
-        self.estado = QLabel("")
-        self.estado.setWordWrap(True)
-        self.estado.setTextFormat(Qt.TextFormat.PlainText)
+        pie = QFrame()
+        pie.setObjectName("pie")
+        caja_pie = QVBoxLayout(pie)
+        caja_pie.setContentsMargins(20, 12, 20, 16)
+        caja_pie.setSpacing(12)
+        caja_pie.addWidget(self.estado)
+        caja_pie.addLayout(abajo)
 
         caja = QVBoxLayout()
-        caja.addWidget(self.ingresos)
-        caja.addLayout(arriba)
-        caja.addWidget(self.aviso)
-        caja.addWidget(self.recuento)
-        caja.addLayout(filtro)
-        caja.addWidget(self.tabla, 1)
-        caja.addLayout(abajo)
-        caja.addWidget(self.estado)
+        caja.setContentsMargins(0, 0, 0, 0)
+        caja.setSpacing(0)
+        caja.addWidget(cabecera)
+        caja.addLayout(medio, 1)
+        caja.addWidget(self.progreso)
+        caja.addWidget(pie)
 
         central = QWidget()
         central.setLayout(caja)
         self.setCentralWidget(central)
+        self.setMinimumSize(900, 600)
         self._ocupada(False)
         self._permitir_escritura(False)
 
@@ -351,7 +403,7 @@ class Ventana(QMainWindow):
 
     def _con_ingresos(self, estado: EstadoIngresos) -> None:
         self.estado_ingresos = estado
-        self.ingresos.setText(estado.texto)
+        self.ingresos.setText(estado.texto, _tono_ingresos(estado))
         if estado.puede_revisar and self.curso is not None:
             self.revisar()
 
@@ -373,7 +425,7 @@ class Ventana(QMainWindow):
         estado.np.estado = OK
         estado.np.detalle = ""
         estado.np.remedio = ""
-        self.ingresos.setText(estado.texto)
+        self.ingresos.setText(estado.texto, _tono_ingresos(estado))
 
     # --- revisar (fases A y B, sin escribir) ------------------------------
     def revisar(self) -> None:
@@ -399,13 +451,14 @@ class Ventana(QMainWindow):
         self.prep = prep
         self._ingreso_confirmado_por_la_revision(prep)
         self._filas = prep.filas()
-        self.recuento.setText(_texto_recuento(self._filas))
+        self.recuento.mostrar(self._filas)
         self.aviso.setText(_texto_aviso(prep))
         self._repintar()
 
         if prep.detenida:
             self.estado.setText(
-                "No se puede sincronizar hasta resolver eso. No se escribió nada."
+                "No se puede sincronizar hasta resolver eso. No se escribió nada.",
+                "error",
             )
             self._permitir_escritura(False)
             return
@@ -441,11 +494,16 @@ class Ventana(QMainWindow):
                     etiqueta(fila.accion),
                 )
             ):
-                self.tabla.setItem(i, col, QTableWidgetItem(valor))
+                self.tabla.setItem(i, col, _celda(valor, col, fila))
 
             self.tabla.setItem(i, COL_AUTORIZO, self._casilla(fila, fila.clave in autorizadas))
 
         self.tabla.blockSignals(False)
+        self.mostrando.setText(
+            f"Mostrando {self.tabla.rowCount()} de {len(self._filas)} fila(s)"
+            if self._filas
+            else ""
+        )
         self.tabla.resizeColumnsToContents()
         self.tabla.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.Stretch
@@ -463,10 +521,14 @@ class Ventana(QMainWindow):
         una nota que alguien ya puso.
         """
         item = QTableWidgetItem()
+        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         if not fila.es_sobrescritura:
             item.setText("—")
+            item.setForeground(QColor(tinte("").tinta))
             item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             return item
+
+        item.setBackground(QColor(tinte(fila.accion).fondo))
 
         item.setFlags(
             Qt.ItemFlag.ItemIsEnabled
@@ -523,7 +585,7 @@ class Ventana(QMainWindow):
                 "encontró nada que escribir.\n"
                 f"Reporte: {ruta}"
             )
-        self.estado.setText(texto)
+        self.estado.setText(texto, "ok")
         # El ensayo no escribió, así que los planes siguen valiendo.
         self._permitir_escritura(True)
 
@@ -566,7 +628,8 @@ class Ventana(QMainWindow):
         self.estado.setText(
             f"Se escribieron {report.total_escritas} nota(s).\n"
             f"{report.to_console()}\n"
-            f"Reporte: {ruta}"
+            f"Reporte: {ruta}",
+            "ok",
         )
         # Después de escribir, los planes describen un pasado. Volver a
         # ofrecerlos permitiría escribir dos veces sobre datos viejos.
@@ -626,12 +689,12 @@ class Ventana(QMainWindow):
         # celdas del lado de Qt, y las autorizaciones guardarían referencias a
         # celdas que ya no existen. Repintar sin filas las deja limpias.
         self._repintar()
-        self.recuento.setText("")
+        self.recuento.limpiar()
         self._permitir_escritura(False)
 
     def _correr(self, funcion, *args, al_terminar=None, mientras: str, **kwargs) -> None:
         self._ocupada(True)
-        self.estado.setText(mientras)
+        self.estado.setText(mientras, "trabajando")
         self._tarea = lanzar(
             funcion,
             *args,
@@ -655,6 +718,7 @@ class Ventana(QMainWindow):
         self.cursos.setEnabled(not ocupada)
         self.boton_configurar.setEnabled(not ocupada)
         self._trabajando = ocupada
+        self.progreso.setVisible(ocupada)
         if ocupada:
             self.boton_sync.setEnabled(False)
             self.boton_ensayo.setEnabled(False)
@@ -714,6 +778,109 @@ def nota_legible(valor: str) -> str:
     # El script ya rotula algunos como «998 (no presentó)»; se toma el número.
     numero = crudo.split()[0].split(".")[0]
     return MARCADORES.get(numero, crudo)
+
+
+def _rotulo(texto: str, campo: QWidget) -> QLabel:
+    """El nombre corto de un campo, atado a él para que Alt+letra y los lectores de pantalla lo encuentren."""
+    rotulo = QLabel(texto)
+    rotulo.setObjectName("rotulo")
+    rotulo.setBuddy(campo)
+    return rotulo
+
+
+def _celda(valor: str, col: int, fila: FilaPlan) -> QTableWidgetItem:
+    """
+    Una celda de la tabla, con el color de su acción donde corresponde.
+
+    Solo se pinta la columna «Qué pasaría», y con el mismo color que su casilla
+    del recuento: así el recuento sirve de leyenda y la tabla no se vuelve un
+    arcoíris. Las notas que cambiarían, que son lo único que pide una decisión,
+    llevan además «Quedaría» en negrita, para que la diferencia se lea sin
+    buscarla.
+    """
+    item = QTableWidgetItem(valor)
+    if col in COLS_NOTA:
+        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        if fila.es_sobrescritura and col == COLS_NOTA[1]:
+            negrita = QFont(item.font())
+            negrita.setBold(True)
+            item.setFont(negrita)
+    if col == COL_ACCION:
+        t = tinte(fila.accion)
+        item.setForeground(QColor(t.tinta))
+        item.setBackground(QColor(t.fondo))
+    return item
+
+
+def _tono_ingresos(estado: EstadoIngresos) -> str:
+    """Rojo si algo se rechazó o falta, ámbar si no se pudo comprobar, verde si todo anda."""
+    if estado.faltan or estado.hay_rechazo:
+        return "error"
+    if estado.moodle.ok and estado.np.ok:
+        return "ok"
+    return "cuidado"
+
+
+class Recuento(QFrame):
+    """
+    Cuántas filas cayeron en cada acción del plan, en una sola línea.
+
+    Es la fila de totales de un acta: están todas las acciones, incluidas las
+    que dan cero (specs/003, A-10). Los ceros van más claros pero se leen,
+    porque un cero al lado de «cambiaría una nota existente» es la respuesta
+    que más tranquiliza. La barra de color de cada casilla es la leyenda de la
+    columna «Qué pasaría».
+
+    Para un lector de pantalla, el mismo recuento va escrito entero en la
+    descripción accesible.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setObjectName("recuento")
+        self._caja = QHBoxLayout(self)
+        self._caja.setContentsMargins(0, 0, 0, 0)
+        self._caja.setSpacing(0)
+        self.setVisible(False)
+
+    def limpiar(self) -> None:
+        while self._caja.count():
+            w = self._caja.takeAt(0).widget()
+            if w is not None:
+                w.deleteLater()
+        self.setAccessibleDescription("")
+        self.setVisible(False)
+
+    def mostrar(self, filas: list[FilaPlan]) -> None:
+        self.limpiar()
+        conteo = Counter(f.accion for f in filas)
+        otras = sorted(set(conteo) - set(ORDEN_ACCIONES))
+        for accion in (*ORDEN_ACCIONES, *otras):
+            self._caja.addWidget(_casilla_recuento(conteo[accion], accion), 1)
+        self.setAccessibleDescription(_texto_recuento(filas))
+        self.setVisible(True)
+
+
+def _casilla_recuento(n: int, accion: str) -> QWidget:
+    casilla = QFrame()
+    casilla.setStyleSheet(
+        f"QFrame {{ border: none; border-left: 4px solid {tinte(accion).tinta}; }}"
+        " QLabel { border: none; }"
+    )
+    cifra = QLabel(str(n))
+    cifra.setProperty("cifra", "si")
+    cifra.setProperty("cero", "si" if n == 0 else "no")
+    nombre = QLabel(etiqueta(accion))
+    nombre.setProperty("nombre", "si")
+    nombre.setWordWrap(True)
+
+    caja = QVBoxLayout(casilla)
+    caja.setContentsMargins(12, 6, 8, 8)
+    caja.setSpacing(0)
+    caja.addWidget(cifra)
+    caja.addWidget(nombre)
+    caja.addStretch(1)
+    return casilla
 
 
 def _texto_recuento(filas: list[FilaPlan]) -> str:

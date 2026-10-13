@@ -29,6 +29,8 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QSizePolicy,
+    QSpacerItem,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -52,7 +54,30 @@ from ..config import (
 from ..discovery import ContextCheck, verificar_contexto
 from ..errors import MnsyncError
 from ..moodle_export import MoodleCourse, MoodleGroup, MoodleSession
+from .estilo import Mensaje
 from .tareas import Fallo, Tarea, lanzar
+
+
+def _formulario() -> QFormLayout:
+    """Un formulario con los rótulos a la izquierda y los campos a lo ancho, igual en todos los pasos."""
+    form = QFormLayout()
+    form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+    form.setHorizontalSpacing(16)
+    form.setVerticalSpacing(8)
+    return form
+
+
+def _seccion(texto: str) -> QLabel:
+    """El título de un grupo de campos."""
+    rotulo = QLabel(texto)
+    rotulo.setObjectName("seccion")
+    return rotulo
+
+
+def _aire() -> QSpacerItem:
+    """La separación entre dos grupos de campos."""
+    return QSpacerItem(0, 12, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
 
 
 @dataclass
@@ -108,14 +133,12 @@ class PasoBase(QWizardPage):
         self.borrador = borrador
         self._tarea: Tarea | None = None
         self._ocupado = False
-        self.estado = QLabel("")
-        self.estado.setWordWrap(True)
-        self.estado.setTextFormat(Qt.TextFormat.PlainText)
+        self.estado = Mensaje()
 
     # --- trabajo en segundo plano ----------------------------------------
     def correr(self, funcion, *args, al_terminar=None, mientras: str = "Un momento…"):
         self._ocupado = True
-        self.estado.setText(mientras)
+        self.estado.setText(mientras, "trabajando")
         self.completeChanged.emit()
         self._tarea = lanzar(
             funcion,
@@ -152,6 +175,9 @@ class PasoVerificable(PasoBase):
         super().__init__(borrador)
         self._verificado = False
         self.boton = QPushButton(texto_boton)
+        # Es el paso que hay que dar en esta página, así que lleva el peso de
+        # botón principal; «Siguiente» se enciende recién cuando este salió bien.
+        self.boton.setProperty("primario", "si")
         self.boton.clicked.connect(self._comprobar)
 
     def _comprobar(self) -> None:  # pragma: no cover - lo define cada paso
@@ -221,25 +247,29 @@ class PasoCredenciales(PasoVerificable):
             "los códigos de tu asignatura."
         )
         explicacion.setWordWrap(True)
+        explicacion.setObjectName("rotulo")
 
-        form = QFormLayout()
-        form.addRow(QLabel("<b>Moodle</b>"))
-        form.addRow("Usuario:", self.moodle_usuario)
-        form.addRow("Contraseña:", self.moodle_clave)
-        form.addRow(QLabel(""))
-        form.addRow(QLabel("<b>Notas Parciales</b>"))
-        form.addRow("Usuario:", self.np_usuario)
-        form.addRow("Contraseña:", self.np_clave)
-        form.addRow(QLabel(""))
-        form.addRow(QLabel("<b>Tu cédula de tutora o tutor</b>"))
+        form = _formulario()
+        form.addRow(_seccion("Moodle"))
+        form.addRow("Usuario", self.moodle_usuario)
+        form.addRow("Contraseña", self.moodle_clave)
+        form.addItem(_aire())
+        form.addRow(_seccion("Notas Parciales"))
+        form.addRow("Usuario", self.np_usuario)
+        form.addRow("Contraseña", self.np_clave)
+        form.addItem(_aire())
+        form.addRow(_seccion("Tu cédula de tutora o tutor"))
         form.addRow(explicacion)
-        form.addRow("Cédula:", self.tutor)
+        form.addRow("Cédula", self.tutor)
 
         caja = QVBoxLayout(self)
         caja.addLayout(form)
+        caja.addSpacing(8)
         caja.addWidget(self.recordar)
-        caja.addWidget(self.boton)
+        caja.addSpacing(8)
+        caja.addWidget(self.boton, 0, Qt.AlignmentFlag.AlignLeft)
         caja.addWidget(self.estado)
+        caja.addStretch(1)
 
         for campo in (
             self.moodle_usuario, self.moodle_clave,
@@ -397,14 +427,16 @@ class PasoGrupos(PasoBase):
             "que sale en la dirección, después de «id=»."
         )
         ayuda.setWordWrap(True)
+        ayuda.setObjectName("rotulo")
 
-        form = QFormLayout()
-        form.addRow("Curso:", self.cursos)
+        form = _formulario()
+        form.addRow("Curso", self.cursos)
+        form.addRow(ayuda)
 
         caja = QVBoxLayout(self)
         caja.addLayout(form)
-        caja.addWidget(ayuda)
-        caja.addWidget(QLabel("Grupos del curso:"))
+        caja.addSpacing(8)
+        caja.addWidget(_seccion("Grupos del curso"))
         caja.addWidget(self.lista)
         caja.addWidget(self.estado)
 
@@ -561,14 +593,14 @@ class PasoCodigos(PasoVerificable):
     """
 
     CAMPOS = [
-        ("ano", "Año:", "2026"),
-        ("pac", "Período (PAC):", "3"),
-        ("asignatura", "Asignatura:", "00883"),
-        ("escuela", "Escuela:", "03"),
-        ("catedra", "Cátedra:", "253"),
-        ("encargado", "Encargado de cátedra:", "ARODRIGUEZP"),
-        ("modelo", "Modelo de evaluación:", "4"),
-        ("tipo", "Tipo:", "O"),
+        ("ano", "Año", "2026"),
+        ("pac", "Período (PAC)", "3"),
+        ("asignatura", "Asignatura", "00883"),
+        ("escuela", "Escuela", "03"),
+        ("catedra", "Cátedra", "253"),
+        ("encargado", "Encargado de cátedra", "ARODRIGUEZP"),
+        ("modelo", "Modelo de evaluación", "4"),
+        ("tipo", "Tipo", "O"),
     ]
 
     def __init__(self, borrador: Borrador) -> None:
@@ -579,7 +611,7 @@ class PasoCodigos(PasoVerificable):
             "Se comprueban contra el sistema antes de seguir."
         )
 
-        form = QFormLayout()
+        form = _formulario()
         self.campos: dict[str, QLineEdit] = {}
         for clave, etiqueta, ejemplo in self.CAMPOS:
             campo = QLineEdit()
@@ -590,8 +622,10 @@ class PasoCodigos(PasoVerificable):
 
         caja = QVBoxLayout(self)
         caja.addLayout(form)
-        caja.addWidget(self.boton)
+        caja.addSpacing(8)
+        caja.addWidget(self.boton, 0, Qt.AlignmentFlag.AlignLeft)
         caja.addWidget(self.estado)
+        caja.addStretch(1)
 
     def _comprobar(self) -> None:
         """
@@ -603,7 +637,7 @@ class PasoCodigos(PasoVerificable):
         """
         vacios = [e for k, e, _ in self.CAMPOS if not self.campos[k].text().strip()]
         if vacios:
-            self.estado.setText("Falta completar: " + ", ".join(vacios))
+            self.estado.setText("Falta completar: " + ", ".join(vacios) + ".")
             return
         if self.borrador.creds is None or self.borrador.curso_moodle is None:
             self.estado.setText("Volvé a los pasos anteriores: falta información.")
@@ -683,10 +717,10 @@ class PasoReparto(PasoBase):
         self.tabla.setHorizontalHeaderLabels(["Grupo de Notas Parciales", "Estudiantes"])
         self.tabla.horizontalHeader().setStretchLastSection(True)
         self.tabla.verticalHeader().setVisible(False)
+        self.tabla.setAlternatingRowColors(True)
+        self.tabla.setShowGrid(False)
 
-        self.huerfanos = QLabel("")
-        self.huerfanos.setWordWrap(True)
-        self.huerfanos.setTextFormat(Qt.TextFormat.PlainText)
+        self.huerfanos = Mensaje()
 
         caja = QVBoxLayout(self)
         caja.addWidget(self.tabla)
@@ -758,9 +792,10 @@ class PasoColumnas(PasoBase):
         self.tabla.setHorizontalHeaderLabels(["Columna en Moodle", "Instrumento"])
         self.tabla.horizontalHeader().setStretchLastSection(True)
         self.tabla.verticalHeader().setVisible(False)
+        self.tabla.setAlternatingRowColors(True)
+        self.tabla.setShowGrid(False)
 
-        self.aviso = QLabel("")
-        self.aviso.setWordWrap(True)
+        self.aviso = Mensaje()
 
         caja = QVBoxLayout(self)
         caja.addWidget(self.tabla)
@@ -801,6 +836,17 @@ class Asistente(QWizard):
         super().__init__()
         self.setWindowTitle("mnsync — configurar un curso")
         self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
+        # Qt los trae en inglés —«< Back», «Next >»— y en un programa que en
+        # todo lo demás habla castellano eso es lo primero que se nota. El de
+        # terminar dice lo que hace: guarda el curso, no «termina» nada.
+        for boton, texto in (
+            (QWizard.WizardButton.BackButton, "Anterior"),
+            (QWizard.WizardButton.NextButton, "Siguiente"),
+            (QWizard.WizardButton.CancelButton, "Cancelar"),
+            (QWizard.WizardButton.FinishButton, "Guardar el curso"),
+        ):
+            self.setButtonText(boton, texto)
+        self.button(QWizard.WizardButton.FinishButton).setProperty("primario", "si")
         self.borrador = Borrador()
         self.work_dir = work_dir
         self.config_path = Path("courses.yml").resolve()
@@ -874,7 +920,7 @@ def construir_asistente(work_dir: Path) -> Asistente:
     asistente = Asistente(work_dir)
     for paso in (PasoCredenciales, PasoGrupos, PasoCodigos, PasoReparto, PasoColumnas):
         asistente.addPage(paso(asistente.borrador))
-    asistente.resize(760, 560)
+    asistente.resize(820, 720)
     return asistente
 
 

@@ -51,12 +51,29 @@ def _contexto():
     return Contexto(creds=load_credentials(require=False), config=config)
 
 
+def _en_castellano(app) -> None:
+    """
+    Carga las traducciones de Qt, para que lo que dibuja Qt solo también hable castellano.
+
+    Sin esto, el menú de clic derecho de un campo dice «Copy» y «Paste» en un
+    programa que en todo lo demás habla castellano. Si las traducciones no
+    vinieron con PySide6, se sigue en inglés: no vale la pena no abrir por eso.
+    """
+    from PySide6.QtCore import QLibraryInfo, QLocale, QTranslator
+
+    traductor = QTranslator(app)
+    ruta = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+    if traductor.load(QLocale("es"), "qtbase", "_", ruta):
+        app.installTranslator(traductor)
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         from PySide6.QtWidgets import QApplication
     except ImportError:
         return _sin_pyside()
 
+    from . import estilo
     from .asistente import construir_asistente
     from .ventana import Ventana
 
@@ -66,6 +83,8 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication.instance() or QApplication(argv if argv is not None else sys.argv)
     app.setApplicationName("mnsync")
     app.setApplicationDisplayName("mnsync — de Moodle a Notas Parciales")
+    _en_castellano(app)
+    estilo.aplicar(app)
 
     work_dir = Path("salida").resolve()
     ctx = _contexto()
@@ -78,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
         ctx = _contexto()
 
     ventana = Ventana(ctx, work_dir)
-    ventana.resize(1000, 700)
+    ventana.resize(1180, 780)
     ventana.show()
     ventana.comprobar_ingresos()
     return app.exec()
