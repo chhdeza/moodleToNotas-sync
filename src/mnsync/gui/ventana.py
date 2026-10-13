@@ -505,6 +505,9 @@ class Ventana(QMainWindow):
             else ""
         )
         self.tabla.resizeColumnsToContents()
+        # Ajustadas al contenido quedan pegadas unas a otras; se les da aire.
+        for col in range(1, self.tabla.columnCount()):
+            self.tabla.setColumnWidth(col, self.tabla.columnWidth(col) + 24)
         self.tabla.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.Stretch
         )

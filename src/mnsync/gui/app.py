@@ -82,7 +82,9 @@ def main(argv: list[str] | None = None) -> int:
     # dependa de quién arrancó primero.
     app = QApplication.instance() or QApplication(argv if argv is not None else sys.argv)
     app.setApplicationName("mnsync")
-    app.setApplicationDisplayName("mnsync — de Moodle a Notas Parciales")
+    # Sin «setApplicationDisplayName»: Qt lo agrega al final del título de
+    # cada ventana, y el asistente terminaba titulado «mnsync — configurar un
+    # curso - mnsync — de Moodle a Notas Parciales». Cada ventana ya se nombra.
     _en_castellano(app)
     estilo.aplicar(app)
 

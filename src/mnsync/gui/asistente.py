@@ -20,10 +20,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -54,7 +56,7 @@ from ..config import (
 from ..discovery import ContextCheck, verificar_contexto
 from ..errors import MnsyncError
 from ..moodle_export import MoodleCourse, MoodleGroup, MoodleSession
-from .estilo import Mensaje
+from .estilo import AMBAR, Mensaje, repintar
 from .tareas import Fallo, Tarea, lanzar
 
 
@@ -73,6 +75,37 @@ def _seccion(texto: str) -> QLabel:
     rotulo = QLabel(texto)
     rotulo.setObjectName("seccion")
     return rotulo
+
+
+def _tabla_de_lectura(encabezados: list[str], *, ultima_es_cifra: bool = False) -> QTableWidget:
+    """
+    Una tabla para mirar, no para editar: sin selección ni foco, y con el ancho donde está el texto.
+
+    Si la última columna es una cifra, se ajusta a su contenido y va a la
+    derecha, y el texto se queda con el resto. Estirarla a ella, como hace Qt
+    por defecto, cortaba el nombre del grupo en «CU 12 / …» para darle media
+    ventana a un número de dos dígitos.
+    """
+    tabla = QTableWidget(0, len(encabezados))
+    tabla.setHorizontalHeaderLabels(encabezados)
+    tabla.verticalHeader().setVisible(False)
+    tabla.verticalHeader().setDefaultSectionSize(34)
+    tabla.setAlternatingRowColors(True)
+    tabla.setShowGrid(False)
+    tabla.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+    tabla.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+    tabla.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+    cabecera = tabla.horizontalHeader()
+    cabecera.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    cabecera.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+    if ultima_es_cifra:
+        ultima = len(encabezados) - 1
+        cabecera.setSectionResizeMode(ultima, QHeaderView.ResizeMode.ResizeToContents)
+        tabla.horizontalHeaderItem(ultima).setTextAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+    return tabla
 
 
 def _aire() -> QSpacerItem:
@@ -716,12 +749,9 @@ class PasoReparto(PasoBase):
         self.setTitle("Adónde van tus notas")
         self.setSubTitle("Revisá que los números cuadren con lo que sabés de tu curso.")
 
-        self.tabla = QTableWidget(0, 2)
-        self.tabla.setHorizontalHeaderLabels(["Grupo de Notas Parciales", "Estudiantes"])
-        self.tabla.horizontalHeader().setStretchLastSection(True)
-        self.tabla.verticalHeader().setVisible(False)
-        self.tabla.setAlternatingRowColors(True)
-        self.tabla.setShowGrid(False)
+        self.tabla = _tabla_de_lectura(
+            ["Grupo de Notas Parciales", "Estudiantes"], ultima_es_cifra=True
+        )
 
         self.huerfanos = Mensaje()
 
@@ -741,9 +771,9 @@ class PasoReparto(PasoBase):
                 fila = self.tabla.rowCount()
                 self.tabla.insertRow(fila)
                 self.tabla.setItem(fila, 0, QTableWidgetItem(d.label))
-                self.tabla.setItem(
-                    fila, 1, QTableWidgetItem(str(check.estudiantes_en.get(d.key, 0)))
-                )
+                cifra = QTableWidgetItem(str(check.estudiantes_en.get(d.key, 0)))
+                cifra.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                self.tabla.setItem(fila, 1, cifra)
 
         self.huerfanos.setText(_texto_huerfanos(check))
 
@@ -791,12 +821,7 @@ class PasoColumnas(PasoBase):
         self.setTitle("Tus columnas de Moodle")
         self.setSubTitle("Así quedó el emparejamiento con los instrumentos del sistema.")
 
-        self.tabla = QTableWidget(0, 2)
-        self.tabla.setHorizontalHeaderLabels(["Columna en Moodle", "Instrumento"])
-        self.tabla.horizontalHeader().setStretchLastSection(True)
-        self.tabla.verticalHeader().setVisible(False)
-        self.tabla.setAlternatingRowColors(True)
-        self.tabla.setShowGrid(False)
+        self.tabla = _tabla_de_lectura(["Columna en Moodle", "Instrumento"])
 
         self.aviso = Mensaje()
 
@@ -815,7 +840,13 @@ class PasoColumnas(PasoBase):
             fila = self.tabla.rowCount()
             self.tabla.insertRow(fila)
             self.tabla.setItem(fila, 0, QTableWidgetItem(i.columna))
-            self.tabla.setItem(fila, 1, QTableWidgetItem(i.descripcion))
+            instrumento = QTableWidgetItem(i.descripcion)
+            if not i.emparejada:
+                # Ámbar, como en la ventana semanal: algo que no se va a subir
+                # y que conviene mirar antes de seguir.
+                instrumento.setForeground(QColor(AMBAR.tinta))
+                instrumento.setBackground(QColor(AMBAR.fondo))
+            self.tabla.setItem(fila, 1, instrumento)
 
         sin = check.columnas_sin_emparejar
         self.aviso.setText(
@@ -849,7 +880,9 @@ class Asistente(QWizard):
             (QWizard.WizardButton.FinishButton, "Guardar el curso"),
         ):
             self.setButtonText(boton, texto)
-        self.button(QWizard.WizardButton.FinishButton).setProperty("primario", "si")
+        # QWizard crea sus botones en el constructor y Qt ya los pulió con la
+        # hoja de estilos: una propiedad puesta después no se ve sin repulir.
+        repintar(self.button(QWizard.WizardButton.FinishButton), "primario", "si")
         self.borrador = Borrador()
         self.work_dir = work_dir
         self.config_path = Path("courses.yml").resolve()

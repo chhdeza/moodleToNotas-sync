@@ -241,7 +241,9 @@ def hoja(f: Letras) -> str:
         selection-background-color: {AZUL.fondo};
         selection-color: {TINTA};
     }}
-    QTableWidget::item {{ padding: 0 8px; border-bottom: 1px solid #EEF1F4; }}
+    /* Sin regla para «QTableWidget::item»: en cuanto la hoja la define, Qt
+       deja de pintar el fondo propio de cada celda, y con él los colores de
+       las acciones. */
     QListWidget::item {{ padding: 6px 8px; }}
     QHeaderView::section {{
         background: {PAPEL};
