@@ -92,6 +92,7 @@ class Borrador:
 
     creds: Credentials | None = None
     cursos_moodle: list[MoodleCourse] = field(default_factory=list)
+    nombre_moodle: str = ""  # el que sale en los títulos de los grupos
     curso_moodle: MoodleCourse | None = None
     grupos_moodle: list[MoodleGroup] = field(default_factory=list)
     seleccionados: list[int] = field(default_factory=list)
@@ -312,10 +313,12 @@ class PasoCredenciales(PasoVerificable):
             mientras="Entrando a Moodle…",
         )
 
-    def _con_cursos(self, cursos: list[MoodleCourse]) -> None:
+    def _con_cursos(self, resultado: tuple[list[MoodleCourse], str]) -> None:
+        cursos, nombre = resultado
         self.boton.setEnabled(True)
         self._verificado = True
         self.borrador.cursos_moodle = list(cursos)
+        self.borrador.nombre_moodle = nombre
 
         if self.recordar.isChecked() and credstore.disponible():
             credstore.guardar(
@@ -498,7 +501,7 @@ class PasoGrupos(PasoBase):
                 "separar a tus estudiantes de los de otros profesores."
             )
             return
-        self.poblar(grupos, self.borrador.creds.moodle_username if self.borrador.creds else "")
+        self.poblar(grupos, self.borrador.nombre_moodle)
         marcados = len(self.marcados())
         self.estado.setText(
             f"Se marcaron {marcados} de {len(grupos)} por tu nombre. Revisá que "
@@ -927,14 +930,16 @@ def construir_asistente(work_dir: Path) -> Asistente:
 # ---------------------------------------------------------------------------
 # El trabajo que hace cada paso
 # ---------------------------------------------------------------------------
-def probar_ingresos(creds: Credentials) -> list[MoodleCourse]:
+def probar_ingresos(creds: Credentials) -> tuple[list[MoodleCourse], str]:
     """
-    Comprueba que Moodle acepta las credenciales, y de paso trae los cursos.
+    Comprueba que Moodle acepta las credenciales, y de paso trae los cursos y
+    el nombre del profesor.
 
     Se hace de una sola vez porque son la misma sesión: pedir la lista de
     cursos **es** la prueba de que el ingreso funcionó.
     """
-    return MoodleSession.iniciar(creds).list_courses()
+    sesion = MoodleSession.iniciar(creds)
+    return sesion.list_courses(), sesion.nombre_completo()
 
 
 def traer_grupos(creds: Credentials, course_id: int) -> list[MoodleGroup]:

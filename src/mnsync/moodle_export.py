@@ -120,6 +120,9 @@ _RE_ETIQUETA = re.compile(r"<[^>]+>")
 _RE_SESSKEY = re.compile(r'"sesskey"\s*:\s*"([^"]+)"')
 _RE_SESSKEY_CAMPO = re.compile(r'name="sesskey"[^>]*value="([^"]+)"')
 
+#: El título de la página de perfil, que es el nombre completo de la persona.
+_RE_TITULO = re.compile(r"<h1\b[^>]*>(.*?)</h1>", re.IGNORECASE | re.DOTALL)
+
 #: El servicio con el que Moodle 4 arma su propia pantalla «Mis cursos».
 _SERVICIO_CURSOS = "core_course_get_enrolled_courses_by_timeline_classification"
 
@@ -297,6 +300,24 @@ class MoodleSession:
         """
         self._require_login()
         return self._cursos_por_servicio() or self._cursos_raspando()
+
+    def nombre_completo(self) -> str:
+        """
+        El nombre del profesor tal como lo muestra Moodle, o ``""``.
+
+        Es el que aparece en los títulos de los grupos («Grupo 5 - Tutor: …»),
+        a diferencia del usuario de ingreso, que suele ser un correo o una
+        cédula. Nunca levanta: solo sirve para premarcar grupos, y sin él el
+        profesor los marca a mano.
+        """
+        self._require_login()
+        try:
+            r = self.session.get(f"{self.base_url}/user/profile.php", timeout=self.timeout)
+            r.raise_for_status()
+        except requests.RequestException:
+            return ""
+        m = _RE_TITULO.search(r.text)
+        return _texto_plano(m.group(1)) if m else ""
 
     def _sesskey(self) -> str:
         """La clave de sesión, leída de la página de inicio."""

@@ -435,3 +435,39 @@ def test_un_error_del_servicio_no_se_toma_por_una_lista():
     s.login("profe", "clave")
 
     assert s.list_courses() == []
+
+
+@responses.activate
+def test_el_nombre_del_profesor_sale_del_perfil():
+    """
+    Es el nombre que Moodle pone en los títulos de los grupos.
+
+    El usuario de ingreso no sirve para eso: suele ser un correo o una cédula,
+    y comparar contra él no marca nunca ningún grupo.
+    """
+    responses.add(responses.GET, f"{BASE_MOODLE}/login/index.php", body=fx.LOGIN_PAGE)
+    responses.add(responses.POST, f"{BASE_MOODLE}/login/index.php", body=fx.LOGIN_OK)
+    responses.add(
+        responses.GET,
+        f"{BASE_MOODLE}/user/profile.php",
+        body='<div class="page-header"><h1 class="h2">CARLOS HERN&Aacute;NDEZ  ALVARADO</h1></div>',
+        status=200,
+    )
+
+    s = MoodleSession(BASE_MOODLE)
+    s.login("profe", "clave")
+
+    assert s.nombre_completo() == "CARLOS HERNÁNDEZ ALVARADO"
+
+
+@responses.activate
+def test_sin_perfil_el_nombre_queda_vacio():
+    """Solo sirve para premarcar grupos: que falle no puede tumbar el asistente."""
+    responses.add(responses.GET, f"{BASE_MOODLE}/login/index.php", body=fx.LOGIN_PAGE)
+    responses.add(responses.POST, f"{BASE_MOODLE}/login/index.php", body=fx.LOGIN_OK)
+    responses.add(responses.GET, f"{BASE_MOODLE}/user/profile.php", status=500)
+
+    s = MoodleSession(BASE_MOODLE)
+    s.login("profe", "clave")
+
+    assert s.nombre_completo() == ""
