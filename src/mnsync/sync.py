@@ -33,7 +33,7 @@ y esperar a que el profesor autorice las sobrescrituras una por una
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -52,7 +52,13 @@ from .guard import (
 )
 from .moodle_export import GradeExport, MoodleSession, identidad, write_moodle_xlsx
 from .report import DestinationOutcome, RunReport
-from .uploader import RunResult, Uploader, escribir_plan_autorizado, leer_plan
+from .uploader import (
+    RunResult,
+    Uploader,
+    escribir_plan_autorizado,
+    escribir_plan_parcial,
+    leer_plan,
+)
 
 
 @dataclass
@@ -265,6 +271,31 @@ class Preparacion:
     routing_verdict: RoutingVerdict
     #: Destinos que fallaron al planificar. Ya vienen como resultado.
     fallidos: list[DestinationOutcome] = field(default_factory=list)
+    #: ``True`` en el cierre del período: cada «-» de Moodle es un «no presentó».
+    #: ``False`` en una sincronización parcial, donde un «-» puede ser solo una
+    #: nota que todavía no se publica y por eso **no se toca**.
+    cierre: bool = False
+    #: Los planes tal como salieron del script, antes de quitar los «no presentó».
+    #: Permite cambiar de modo sin volver a bajar nada.
+    planes_completos: list[tuple[Destination, Path]] = field(default_factory=list)
+
+    def con_cierre(self, cierre: bool) -> Preparacion:
+        """
+        La misma corrida, en modo parcial o de cierre. Es local: no baja nada.
+
+        En modo parcial los planes pasan a ser copias sin las filas «no
+        presentó» (``parcial_<plan>.csv``); el original queda intacto. El
+        enrutamiento no cambia: quién existe y adónde va no depende del modo.
+        """
+        completos = self.planes_completos or self.planes
+        if cierre:
+            planes = list(completos)
+        else:
+            planes = [
+                (d, escribir_plan_parcial(p, p.with_name("parcial_" + p.name)))
+                for d, p in completos
+            ]
+        return replace(self, cierre=cierre, planes=planes, planes_completos=list(completos))
 
     @property
     def detenida(self) -> bool:
@@ -306,12 +337,17 @@ def preparar(
     groups: list[MoodleGroupRef] | None = None,
     fence_journal: Path | None = None,
     session: MoodleSession | None = None,
+    cierre: bool = False,
 ) -> Preparacion:
     """
     Fases A y B: recolectar, agrupar y enrutar. **No escribe nada.**
 
     Todo lo que hace son lecturas y planes, así que se puede llamar tantas
     veces como haga falta sin consecuencias.
+
+    ``cierre`` dice si es la sincronización de fin de período. Por defecto no:
+    en una parcial las evaluaciones que Moodle aún no publica vienen como «-» y
+    no deben quedar marcadas como «no presentó».
     """
     # --- Fase A: recolectar y agrupar ---------------------------------------
     exports = fetch_groups(course, creds, groups=groups, session=session)
@@ -350,7 +386,8 @@ def preparar(
         routing=routing,
         routing_verdict=check_routing(routing),
         fallidos=fallidos,
-    )
+        planes_completos=list(planes),
+    ).con_cierre(cierre)
 
 
 def aplicar(
@@ -431,6 +468,7 @@ def sync_course(
     allow_update: bool | None = None,
     fence_journal: Path | None = None,
     session: MoodleSession | None = None,
+    cierre: bool = False,
 ) -> RunReport:
     """
     Sincroniza un curso entero (o solo los grupos de Moodle indicados).
@@ -440,7 +478,13 @@ def sync_course(
     script de Notas Parciales.
     """
     prep = preparar(
-        course, creds, work_dir, groups=groups, fence_journal=fence_journal, session=session
+        course,
+        creds,
+        work_dir,
+        groups=groups,
+        fence_journal=fence_journal,
+        session=session,
+        cierre=cierre,
     )
     return aplicar(prep, commit=commit, allow_update=allow_update)
 

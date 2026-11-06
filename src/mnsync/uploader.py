@@ -30,7 +30,7 @@ from pathlib import Path
 
 import openpyxl
 
-from .acciones import SIN_ROSTER, SOBRESCRIBIRIA
+from .acciones import NO_PRESENTO, SIN_ROSTER, SOBRESCRIBIRIA
 from .config import Course, Credentials, Destination
 from .errors import UploaderError
 
@@ -407,6 +407,19 @@ def escribir_plan_autorizado(
         lambda f: _campo(f, "accion") != SOBRESCRIBIRIA
         or (_campo(f, "cedula"), _campo(f, "instrumento")) in autorizadas,
     )
+
+
+def escribir_plan_parcial(plan_path: Path, salida: Path) -> Path:
+    """
+    Copia el plan sin las filas «no presentó»: lo que usa una sincronización parcial.
+
+    Moodle escribe «-» tanto para «no entregó» como para «todavía no se
+    califica», y el script lo lee siempre como «no presentó». Mientras el
+    período no cierra, no hay forma de distinguirlos, así que esas filas se
+    sacan del plan: ni se muestran ni se escriben. Las notas numéricas, que no
+    son ambiguas, quedan intactas.
+    """
+    return _filtrar_plan(plan_path, salida, lambda f: _campo(f, "accion") != NO_PRESENTO)
 
 
 def _filtrar_plan(

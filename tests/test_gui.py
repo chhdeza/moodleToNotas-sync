@@ -274,7 +274,9 @@ def test_no_existe_ninguna_casilla_que_autorice_todo(ventana):
     from PySide6.QtWidgets import QCheckBox
 
     _con_filas(ventana, [_fila("001", "would_overwrite"), _fila("002", "would_overwrite")])
-    assert ventana.findChildren(QCheckBox) == []
+    # La única casilla permitida es el modo (parcial/cierre), que no autoriza
+    # ninguna escritura: solo decide qué filas «no presentó» entran al plan.
+    assert [c for c in ventana.findChildren(QCheckBox) if c is not ventana.cierre] == []
 
 
 def test_solo_las_sobrescrituras_se_pueden_autorizar(ventana):
@@ -712,3 +714,54 @@ def test_falta_la_cedula_se_dice_con_el_nombre_que_tiene_en_pantalla(paso_creden
     paso_credenciales._comprobar()
 
     assert "tu cédula de tutora o tutor" in paso_credenciales.estado.text()
+
+
+# ---------------------------------------------------------------------------
+# Sincronización parcial y cierre del período
+# ---------------------------------------------------------------------------
+def test_la_confirmacion_dice_en_que_modo_escribe():
+    filas = [_fila("001", "upload"), _fila("002", "mark_not_presented")]
+
+    parcial, _ = texto_confirmacion(filas, set())
+    cierre, _ = texto_confirmacion(filas, set(), cierre=True)
+
+    assert "Sincronización parcial" in parcial
+    assert "se marcan «no presentó»" not in parcial
+    assert "Cierre del período: 1" in cierre
+
+
+def test_el_modo_parcial_es_el_de_arranque(ventana):
+    assert not ventana.cierre.isChecked()
+
+
+def test_cambiar_de_modo_filtra_los_no_presento_sin_volver_a_bajar(ventana, tmp_path):
+    from mnsync.config import Course, NotasParcialesCtx
+    from mnsync.guard import Routing, RoutingVerdict
+    from mnsync.sync import Preparacion
+
+    plan = tmp_path / "notas_plan_x.csv"
+    plan.write_text(
+        "cedula,nombre,instrumento,instrumento_nombre,nota_local,nota_remota,accion,motivo\n"
+        "001,ANA,Tar1,Tarea 1,8.9,,upload,\n"
+        "002,LUIS,Tar3,Tarea 3,-,,mark_not_presented,\n",
+        encoding="utf-8",
+    )
+    np = NotasParcialesCtx(
+        ano="2026", pac="4", tipo="O", asignatura="00883",
+        escuela="03", catedra=253, encargado="X", modelo=4,
+    )
+    prep = Preparacion(
+        course=Course(id="c", moodle_course_id=1, np=np, groups=()),
+        uploader=None, exports=[], destinos=(DESTINO,), planes=[(DESTINO, plan)],
+        routing=Routing(), routing_verdict=RoutingVerdict(allowed=True),
+    ).con_cierre(False)
+
+    ventana.mostrar(prep)
+    assert [f.accion for f in ventana._filas] == ["upload"]  # parcial: sin «no presentó»
+
+    ventana.cierre.setChecked(True)
+    assert sorted(f.accion for f in ventana._filas) == ["mark_not_presented", "upload"]
+
+    ventana.cierre.setChecked(False)
+    assert [f.accion for f in ventana._filas] == ["upload"]
+    assert plan.read_text(encoding="utf-8").count("mark_not_presented") == 1  # original intacto

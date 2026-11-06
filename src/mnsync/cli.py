@@ -493,6 +493,12 @@ def cmd_destinos(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 # plan / sync
 # ---------------------------------------------------------------------------
+AYUDA_CIERRE = (
+    "Sincronización de fin de período: cada «-» de Moodle se marca «no presentó». "
+    "Sin esta bandera (sincronización parcial) esas celdas no se tocan."
+)
+
+
 def _ejecutar(args: argparse.Namespace, *, commit: bool, fence: Path | None = None) -> int:
     cfg, creds = _cargar(args)
     course = cfg.course(args.course)
@@ -509,6 +515,7 @@ def _ejecutar(args: argparse.Namespace, *, commit: bool, fence: Path | None = No
         groups=_grupos_pedidos(course, args),
         allow_update=_allow_update(args),
         fence_journal=fence,
+        cierre=bool(getattr(args, "cierre", False)),
     )
 
     print()
@@ -604,6 +611,7 @@ def cmd_rehearse(args: argparse.Namespace) -> int:
         groups=_grupos_pedidos(course, args),
         allow_update=_allow_update(args),
         fence_journal=diario,  # ...pero la reja intercepta cada envío
+        cierre=bool(getattr(args, "cierre", False)),
     )
 
     print()
@@ -771,6 +779,7 @@ def build_parser() -> argparse.ArgumentParser:
     de.set_defaults(func=cmd_destinos)
 
     pl = sub.add_parser("plan", parents=[con_grupo], help="Ver qué se subiría, sin escribir nada")
+    pl.add_argument("--cierre", action="store_true", help=AYUDA_CIERRE)
     pl.set_defaults(func=cmd_plan)
 
     s = sub.add_parser(
@@ -782,6 +791,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Permitir cambiar notas que ya están puestas (queda justificado en el sistema)",
     )
+    s.add_argument("--cierre", action="store_true", help=AYUDA_CIERRE)
     s.set_defaults(func=cmd_sync)
 
     r = sub.add_parser(
@@ -790,6 +800,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ensayo contra el servidor real con la escritura interceptada",
     )
     r.add_argument("--allow-update", action="store_true")
+    r.add_argument("--cierre", action="store_true", help=AYUDA_CIERRE)
     r.set_defaults(func=cmd_rehearse)
 
     le = sub.add_parser(

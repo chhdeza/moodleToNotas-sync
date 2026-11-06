@@ -31,6 +31,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFrame,
     QHBoxLayout,
@@ -46,7 +47,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..acciones import ESCRITURA, ETIQUETAS, NUEVAS, REQUIEREN_ATENCION, etiqueta
+from ..acciones import (
+    ESCRITURA,
+    ETIQUETAS,
+    NO_PRESENTO,
+    NUEVAS,
+    REQUIEREN_ATENCION,
+    etiqueta,
+)
 from ..config import Config, Course, Credentials, load_config, load_credentials, missing_credentials
 from ..errors import MnsyncError
 from ..moodle_export import MoodleSession
@@ -280,7 +288,21 @@ class Ventana(QMainWindow):
         self.mostrando = QLabel("")
         self.mostrando.setObjectName("rotulo")
 
+        # Parcial por defecto: marcar «no presentó» es lo único que no se puede
+        # deshacer desde acá, y un «-» de Moodle puede ser solo una nota que
+        # todavía no se publica.
+        self.cierre = QCheckBox("Cierre del período")
+        self.cierre.setToolTip(
+            "Sin marcar (sincronización parcial): solo se suben notas. Lo que "
+            "Moodle muestra con «-» no se toca, porque puede ser una evaluación "
+            "que todavía no se califica.\n\n"
+            "Marcado (fin del período): cada «-» se marca como «no presentó»."
+        )
+        self.cierre.toggled.connect(self._cambio_de_modo)
+
         filtro = QHBoxLayout()
+        filtro.addWidget(self.cierre)
+        filtro.addSpacing(16)
         filtro.addWidget(self.mostrando)
         filtro.addStretch(1)
         filtro.addWidget(_rotulo("Ver", self.ver))
@@ -445,7 +467,20 @@ class Ventana(QMainWindow):
                 "Bajando tus notas de Moodle y preguntándole a Notas Parciales "
                 "qué hay puesto. No se escribe nada."
             ),
+            cierre=self.cierre.isChecked(),
         )
+
+    def _cambio_de_modo(self, marcado: bool) -> None:
+        """
+        Pasa de sincronización parcial a cierre (o al revés) sin volver a bajar.
+
+        El modo solo decide qué filas «no presentó» entran al plan, y eso se
+        resuelve con los planes que ya están. Si todavía no hay revisión, el
+        modo se usa en la próxima.
+        """
+        if self.prep is None or self._trabajando:
+            return
+        self.mostrar(self.prep.con_cierre(marcado))
 
     def mostrar(self, prep: Preparacion) -> None:
         """Enseña el plan completo: los recuentos, el aviso y fila por fila."""
@@ -608,7 +643,9 @@ class Ventana(QMainWindow):
 
     def _confirmar(self, autorizadas: set[tuple[str, str]]) -> bool:
         """La última pregunta antes de escribir. El texto se arma aparte."""
-        resumen, advertencia = texto_confirmacion(self._filas, autorizadas)
+        resumen, advertencia = texto_confirmacion(
+            self._filas, autorizadas, cierre=self.cierre.isChecked()
+        )
 
         caja = QMessageBox(self)
         caja.setIcon(QMessageBox.Icon.Warning)
@@ -904,7 +941,7 @@ def _texto_recuento(filas: list[FilaPlan]) -> str:
 
 
 def texto_confirmacion(
-    filas: list[FilaPlan], autorizadas: set[tuple[str, str]]
+    filas: list[FilaPlan], autorizadas: set[tuple[str, str]], *, cierre: bool = False
 ) -> tuple[str, str]:
     """
     Lo que se pregunta justo antes de escribir: el resumen y la advertencia.
@@ -916,6 +953,14 @@ def texto_confirmacion(
     """
     nuevas = sum(1 for f in filas if f.accion in NUEVAS)
     resumen = [f"Se van a escribir {nuevas} nota(s) nuevas."]
+
+    ausentes = sum(1 for f in filas if f.accion == NO_PRESENTO)
+    if cierre and ausentes:
+        resumen.append(
+            f"Cierre del período: {ausentes} de ellas se marcan «no presentó»."
+        )
+    elif not cierre:
+        resumen.append("Sincronización parcial: lo que Moodle muestra con «-» no se toca.")
 
     pendientes = sum(1 for f in filas if f.es_sobrescritura)
     if pendientes:
