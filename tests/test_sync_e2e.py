@@ -83,7 +83,8 @@ def test_matriz_completa_de_acciones(fake_np, tmp_path):
     mock_moodle(responses.mock, {38525: csv_body})
 
     cfg = escribir_courses_yml(tmp_path, [(38525, "42", 1)])
-    assert correr(tmp_path, cfg, "plan", "--course", "curso-prueba") == 0
+    # El cierre del período: ahí cada «-» sí es un «no presentó».
+    assert correr(tmp_path, cfg, "plan", "--course", "curso-prueba", "--cierre") == 0
 
     plan = leer_planes(tmp_path)
     fallos = []
@@ -397,3 +398,43 @@ def test_roster_vacio_no_se_confunde_con_exito(fake_np, tmp_path):
     codigo = correr(tmp_path, cfg, "sync", "--course", "curso-prueba", "--commit")
     assert codigo != 0
     assert fake_np.journal == []
+
+
+# ---------------------------------------------------------------------------
+# Sincronización parcial: lo que Moodle aún no publica no se toca
+# ---------------------------------------------------------------------------
+@responses.activate
+def test_parcial_no_marca_no_presento_pero_el_cierre_si(fake_np, tmp_path):
+    """
+    Moodle escribe «-» tanto para «no entregó» como para «aún no se califica».
+    En una sincronización parcial ese «-» no se toca; solo en el cierre del
+    período se marca «no presentó». Las notas numéricas suben en los dos modos.
+    """
+    estudiantes = make_students(2, cu="42")
+    con_nota, sin_nota = estudiantes
+    notas = {con_nota.cedula: {COLUMNA: "89"}, sin_nota.cedula: {COLUMNA: "-"}}
+    for st in estudiantes:
+        fake_np.scenario.add_student("42", 1, st.cedula, st.nombre_completo)
+
+    csv_body = fx.export_csv(estudiantes, notas, columnas=(COLUMNA,))
+    mock_moodle(responses.mock, {38525: csv_body})
+    cfg = escribir_courses_yml(tmp_path, [(38525, "42", 1)])
+
+    # Parcial (por defecto): sube la nota, el «-» no existe para el plan.
+    assert correr(tmp_path, cfg, "sync", "--course", "curso-prueba", "--commit") == 0
+    assert [(w.cedula, float(w.nota), w.es_no_presento) for w in fake_np.journal] == [
+        (con_nota.cedula, 8.9, False)
+    ]
+    # El plan que se ejecuta (la copia parcial) no tiene la fila; el original,
+    # tal como salió del script, queda intacto.
+    parciales = sorted((tmp_path / "salida").glob("parcial_notas_plan_*.csv"))
+    assert parciales
+    ejecutado = "".join(p.read_text(encoding="utf-8-sig") for p in parciales)
+    assert "mark_not_presented" not in ejecutado
+
+    # Cierre: ahora sí queda marcado.
+    assert correr(
+        tmp_path, cfg, "sync", "--course", "curso-prueba", "--commit", "--cierre"
+    ) == 0
+    marcados = [w for w in fake_np.journal if w.es_no_presento]
+    assert [w.cedula for w in marcados] == [sin_nota.cedula]
